@@ -1,22 +1,10 @@
 version: '3.8'
 
+name: a2a-orchestrator
+
 services:
-  a2a-orchestrator-backend:
+  backend:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "3001:3001"
-    environment:
-      - NODE_ENV=production
-      - PORT=3001
-      - LLM_API_URL=${LLM_API_URL}
-      - LLM_MODEL=${LLM_MODEL}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
