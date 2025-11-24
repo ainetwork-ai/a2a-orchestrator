@@ -196,6 +196,57 @@ router.delete("/:threadId/agents/:agentId", (req: Request, res: Response) => {
   }
 });
 
+// Get messages from a thread
+router.get("/:threadId/messages", (req: Request, res: Response) => {
+  try {
+    const { threadId } = req.params;
+    const { limit, offset, order } = req.query;
+
+    const threadManager = ThreadManager.getInstance();
+    const world = threadManager.getWorld(threadId);
+
+    if (!world) {
+      return res.status(404).json({
+        error: 'Thread not found',
+      });
+    }
+
+    let messages = world.getHistory();
+    const total = messages.length;
+
+    // Sort results by timestamp (asc = oldest first, desc = newest first)
+    if (order === 'desc') {
+      messages = [...messages].reverse();
+    }
+
+    // Apply pagination
+    const limitNum = limit ? parseInt(limit as string, 10) : undefined;
+    const offsetNum = offset ? parseInt(offset as string, 10) : 0;
+
+    if (limitNum !== undefined && limitNum > 0) {
+      messages = messages.slice(offsetNum, offsetNum + limitNum);
+    } else if (offsetNum > 0) {
+      messages = messages.slice(offsetNum);
+    }
+
+    res.json({
+      success: true,
+      messages,
+      pagination: {
+        total,
+        limit: limitNum,
+        offset: offsetNum,
+        count: messages.length,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error getting thread messages:", error);
+    res.status(500).json({
+      error: error.message || "Internal server error"
+    });
+  }
+});
+
 // Send a message in a thread
 router.post("/:threadId/messages", async (req: Request, res: Response) => {
   try {
