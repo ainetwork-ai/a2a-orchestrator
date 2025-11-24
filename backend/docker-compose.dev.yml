@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:8-alpine
+    container_name: a2a-orchestrator-redis-dev
+    env_file:
+      - .env.dev
+    ports:
+      - "6378:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    container_name: a2a-orchestrator-backend-dev
+    ports:
+      - "3006:3001"
+    env_file:
+      - .env.dev
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+    name: a2a-orchestrator-redis-data
