@@ -278,38 +278,51 @@ Respond in JSON format only:
       // Generate block for accepted message and get next speaker recommendation
       const blockResult = await this.summarizeBlock(acceptedMessage);
       this.currentBlock = blockResult.summary;
-      this.nextSpeaker = blockResult.next;
-      this.notifyBlock(blockResult);
+
+      // Update next speaker only if verifier didn’t stop the conversation
+      if (!this.shouldStopConversation) {
+        this.nextSpeaker = blockResult.next;
+      } else {
+        console.log(`[BROADCAST] Keeping next speaker as user due to stop flag`);
+      }
+
+      // Notify with actual next speaker
+      this.notifyBlock({
+        summary: blockResult.summary,
+        next: this.nextSpeaker,
+        stop_reason: this.stopReason,
+        user_intent: this.userIntent,
+      });
 
       console.log(`[BLOCK UPDATED] ${this.currentBlock.substring(0, 100)}...`);
-      console.log(`[NEXT SPEAKER RECOMMENDED] ${blockResult.next.name} (${blockResult.next.id})`);
+      console.log(`[NEXT SPEAKER RECOMMENDED] ${this.nextSpeaker.name} (${this.nextSpeaker.id})`);
 
       // Start verification in background (non-blocking)
       this.verifier.verify(
-        this.initialUserMessage,
-        this.currentBlock,
-        acceptedMessage.content,
-        acceptedMessage.speaker,
-        this.currentConversationMessageCount
+          this.initialUserMessage,
+          this.currentBlock,
+          acceptedMessage.content,
+          acceptedMessage.speaker,
+          this.currentConversationMessageCount
       ).then(verification => {
-        this.userIntent = verification.user_intent;
-        if (verification.should_stop) {
-          this.shouldStopConversation = true;
-          this.stopReason = verification.stop_reason;
+          this.userIntent = verification.user_intent;
+          if (verification.should_stop) {
+            this.shouldStopConversation = true;
+            this.stopReason = verification.stop_reason;
           this.nextSpeaker = { id: "user", name: "User" };
-          console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
+            console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
 
-          // Notify UI about the stop
-          this.notifyBlock({
-            summary: this.currentBlock,
-            next: this.nextSpeaker,
-            stop_reason: this.stopReason,
-            user_intent: this.userIntent
-          });
-        }
+            // Notify UI about the stop
+            this.notifyBlock({
+              summary: this.currentBlock,
+              next: this.nextSpeaker,
+              stop_reason: this.stopReason,
+              user_intent: this.userIntent,
+            });
+          }
       }).catch(error => {
         console.error("Error in verification:", error);
-      });
+        });
 
       // Save to Redis
       this.saveMessagesToRedis(this.threadId);
@@ -352,6 +365,12 @@ Respond in JSON format only:
 
       console.log(`[AUTO] Round ${round + 1}/${maxRounds}: ${this.nextSpeaker.name} responding...`);
 
+      // Check again before agent responds
+      if (this.shouldStopConversation) {
+        console.log(`[AUTO] Stop flag detected before agent response, ending conversation`);
+        break;
+      }
+
       try {
         const mainHistory = this.messageDAG.getMainHistory();
         const content = await nextAgent.respond(mainHistory, lastMessage, this.currentBlock);
@@ -375,8 +394,21 @@ Respond in JSON format only:
         // Generate block and get next speaker recommendation
         const blockResult = await this.summarizeBlock(agentMessage);
         this.currentBlock = blockResult.summary;
-        this.nextSpeaker = blockResult.next;
-        this.notifyBlock(blockResult);
+
+        // Update next speaker only if verifier didn’t stop the conversation
+        if (!this.shouldStopConversation) {
+          this.nextSpeaker = blockResult.next;
+        } else {
+          console.log(`[AUTO] Keeping next speaker as user due to stop flag`);
+        }
+
+        // Notify with actual next speaker
+        this.notifyBlock({
+          summary: blockResult.summary,
+          next: this.nextSpeaker,
+          stop_reason: this.stopReason,
+          user_intent: this.userIntent,
+        });
 
         console.log(`[AUTO] ${nextAgent.getName()} responded. Next: ${this.nextSpeaker.name}`);
 
@@ -385,30 +417,30 @@ Respond in JSON format only:
 
         // Run verification in background (non-blocking)
         this.verifier.verify(
-          this.initialUserMessage,
-          this.currentBlock,
-          agentMessage.content,
-          agentMessage.speaker,
-          this.currentConversationMessageCount
+            this.initialUserMessage,
+            this.currentBlock,
+            agentMessage.content,
+            agentMessage.speaker,
+            this.currentConversationMessageCount
         ).then(verification => {
-          this.userIntent = verification.user_intent;
-          if (verification.should_stop) {
-            this.shouldStopConversation = true;
-            this.stopReason = verification.stop_reason;
-            this.nextSpeaker = { id: "user", name: "User" };
-            console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
+            this.userIntent = verification.user_intent;
+            if (verification.should_stop) {
+              this.shouldStopConversation = true;
+              this.stopReason = verification.stop_reason;
+              this.nextSpeaker = { id: "user", name: "User" };
+              console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
 
-            // Notify UI about the stop
-            this.notifyBlock({
-              summary: this.currentBlock,
-              next: this.nextSpeaker,
-              stop_reason: this.stopReason,
-              user_intent: this.userIntent
-            });
-          }
+              // Notify UI about the stop
+              this.notifyBlock({
+                summary: this.currentBlock,
+                next: this.nextSpeaker,
+                stop_reason: this.stopReason,
+                user_intent: this.userIntent,
+              });
+            }
         }).catch(error => {
           console.error("Error in verification:", error);
-        });
+          });
 
         // Update for next iteration
         lastMessage = agentMessage;
