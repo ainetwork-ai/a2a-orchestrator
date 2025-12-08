@@ -7,4 +7,5 @@ services:
       - "3002:3001"
     env_file:
       - .env.prod
-    # Uses external Redis via host.docker.internal:6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
