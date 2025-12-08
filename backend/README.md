@@ -54,23 +54,22 @@ npm start
 
 ## Docker Deployment
 
-### Option 1: Docker Compose (Recommended)
+### Option 1: Docker Compose with Makefile (Recommended)
 
-1. Create `.env` file with your configuration
-
-2. Build and run:
+Development environment (includes Redis):
 ```bash
-docker-compose up -d
+make dev         # Start
+make dev-build   # Build and start
+make dev-logs    # View logs
+make dev-down    # Stop
 ```
 
-3. View logs:
+Production environment (requires external Redis):
 ```bash
-docker-compose logs -f
-```
-
-4. Stop:
-```bash
-docker-compose down
+make prod        # Start
+make prod-build  # Build and start
+make prod-logs   # View logs
+make prod-down   # Stop
 ```
 
 ### Option 2: Docker CLI
@@ -178,6 +177,10 @@ This backend uses the A2A (Agent-to-Agent) protocol to communicate with external
 
 ## Production Deployment
 
+### Prerequisites
+- Ensure Redis is running and accessible at `host.docker.internal:6379`
+- Configure `.env.prod` file with production settings
+
 ### Using Docker on Remote Server
 
 1. Copy files to server:
@@ -191,31 +194,16 @@ ssh user@server
 cd /path/to/app/backend
 ```
 
-3. Create `.env` file with production settings
+3. Ensure `.env.prod` file has correct production settings
 
-4. Deploy with docker-compose:
+4. Deploy with Makefile:
 ```bash
-docker-compose up -d
+make prod
 ```
 
-### Environment Variables for Production
-
-```env
-NODE_ENV=production
-PORT=3001
-
-# LLM API for Verifier
-LLM_API_URL=http://your-llm-server:8000/v1/chat/completions
-LLM_MODEL=/path/to/your/model
-
-# A2A Agent URLs
-AGENT_RYU_SEONG_RYONG_URL=https://your-agent-server.com/agent/ryu-seong-ryong
-AGENT_RYU_UN_RYONG_URL=https://your-agent-server.com/agent/ryu-un-ryong
-AGENT_GGAEBI_URL=https://your-agent-server.com/agent/ggaebi
-AGENT_HORAENG_URL=https://your-agent-server.com/agent/horaeng
-
-# CORS
-ALLOWED_ORIGINS=https://your-frontend-domain.com
+Or with docker-compose directly:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 ## Health Check

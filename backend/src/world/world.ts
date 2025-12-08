@@ -113,6 +113,85 @@ export class World {
   }
 
   /**
+   * Select relevant agents based on user message content using LLM
+   * Returns array of agent names that are mentioned or related to the message
+   */
+  private async selectRelevantAgents(userMessage: Message): Promise<Agent[]> {
+    // Build agent information for prompt
+    const agentInfo = this.agents.map(agent => {
+      const persona = agent.getPersona();
+      return `- ID: ${persona.name}, Name: ${persona.name}, Role: ${persona.role}`;
+    }).join('\n');
+
+    const agentsList = this.agents.map(agent => agent.getName()).join(", ");
+
+    const prompt = `Analyze the following user message and select agents that are relevant to respond.
+
+User Message:
+${userMessage.content}
+
+Available Agents:
+${agentInfo}
+
+Selection Criteria:
+1. Agents whose names are explicitly mentioned in the message (e.g., @AgentName or "AgentName")
+2. Agents whose roles are relevant to the topic or content of the message
+
+Instructions:
+- Return a list of agent IDs that match the criteria
+- If NO agents are relevant (message is too general or doesn't match any agent's role), return an empty array
+- Do not force a selection if there's no clear relevance
+
+Respond in JSON format only:
+{
+  "agents": ["agent_id1", "agent_id2"],
+  "reason": "Explanation of why these agents were selected"
+}`;
+
+    try {
+      console.log(`\n[Agent Selection] Requesting LLM to select relevant agents...`);
+      console.log(`[Agent Selection] User message: ${userMessage.content.substring(0, 100)}...`);
+
+      const requestManager = RequestManager.getInstance();
+      const response = await requestManager.request(
+        this.apiUrl,
+        this.model,
+        [{ role: "user", content: prompt }],
+        400,
+        0.3
+      );
+
+      // Parse JSON response - remove markdown code blocks if present
+      let jsonStr = response.trim();
+      if (jsonStr.startsWith("```json")) {
+        jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+      } else if (jsonStr.startsWith("```")) {
+        jsonStr = jsonStr.replace(/```\s*/g, "");
+      }
+
+      const parsed = JSON.parse(jsonStr);
+      const selectedAgentIds = parsed.agents || [];
+      const reason = parsed.reason || "No reason provided";
+
+      console.log(`[Agent Selection] LLM response: ${selectedAgentIds.length} agents selected`);
+      console.log(`[Agent Selection] Reason: ${reason}`);
+
+      // Convert agent IDs to Agent objects
+      const selectedAgents = this.agents.filter(agent =>
+        selectedAgentIds.includes(agent.getName())
+      );
+
+      console.log(`[Agent Selection] Matched agents: ${selectedAgents.map(a => a.getName()).join(', ')}`);
+
+      return selectedAgents;
+    } catch (error) {
+      console.error("[Agent Selection] Error selecting relevant agents:", error);
+      // On error, return empty array to trigger random selection fallback
+      return [];
+    }
+  }
+
+  /**
    * Summarize the current block with new accepted message and recommend next speaker
    */
   private async summarizeBlock(newMessage: Message): Promise<{
@@ -241,16 +320,28 @@ Respond in JSON format only:
   }
 
   /**
-   * Broadcast user message to randomly selected agents (parallel responses)
-   * Randomly selects 1-4 agents from the available agents
+   * Broadcast user message to relevant agents (parallel responses)
+   * Uses LLM to select agents mentioned or related to the message
+   * Falls back to random selection (1-4 agents) if no relevant agents found
    */
   async broadcastToAgents(userMessage: Message) {
-    // Randomly select 1-4 agents
-    const numAgentsToSelect = Math.floor(Math.random() * 4) + 1; // Random number between 1 and 4
-    const selectedAgents = this.selectRandomAgents(numAgentsToSelect);
+    // Use LLM to select relevant agents
+    const relevantAgents = await this.selectRelevantAgents(userMessage);
 
-    console.log(`\n[BROADCAST] Broadcasting to ${selectedAgents.length} randomly selected agents (out of ${this.agents.length})...`);
-    console.log(`[BROADCAST] Selected agents: ${selectedAgents.map(a => a.getName()).join(', ')}`);
+    let selectedAgents: Agent[];
+
+    if (relevantAgents.length > 0) {
+      // Use LLM-selected agents
+      selectedAgents = relevantAgents;
+      console.log(`\n[BROADCAST] LLM selected ${selectedAgents.length} relevant agent(s) (out of ${this.agents.length})...`);
+      console.log(`[BROADCAST] Selected agents: ${selectedAgents.map(a => a.getName()).join(', ')}`);
+    } else {
+      // Fallback to random selection
+      const numAgentsToSelect = Math.floor(Math.random() * 4) + 1; // Random number between 1 and 4
+      selectedAgents = this.selectRandomAgents(numAgentsToSelect);
+      console.log(`\n[BROADCAST] No relevant agents found, randomly selecting ${selectedAgents.length} agent(s) (out of ${this.agents.length})...`);
+      console.log(`[BROADCAST] Selected agents: ${selectedAgents.map(a => a.getName()).join(', ')}`);
+    }
 
     // Request responses from selected agents in parallel
     const responsePromises = selectedAgents.map(agent =>
@@ -278,38 +369,51 @@ Respond in JSON format only:
       // Generate block for accepted message and get next speaker recommendation
       const blockResult = await this.summarizeBlock(acceptedMessage);
       this.currentBlock = blockResult.summary;
-      this.nextSpeaker = blockResult.next;
-      this.notifyBlock(blockResult);
+
+      // Update next speaker only if verifier didn’t stop the conversation
+      if (!this.shouldStopConversation) {
+        this.nextSpeaker = blockResult.next;
+      } else {
+        console.log(`[BROADCAST] Keeping next speaker as user due to stop flag`);
+      }
+
+      // Notify with actual next speaker
+      this.notifyBlock({
+        summary: blockResult.summary,
+        next: this.nextSpeaker,
+        stop_reason: this.stopReason,
+        user_intent: this.userIntent,
+      });
 
       console.log(`[BLOCK UPDATED] ${this.currentBlock.substring(0, 100)}...`);
-      console.log(`[NEXT SPEAKER RECOMMENDED] ${blockResult.next.name} (${blockResult.next.id})`);
+      console.log(`[NEXT SPEAKER RECOMMENDED] ${this.nextSpeaker.name} (${this.nextSpeaker.id})`);
 
       // Start verification in background (non-blocking)
       this.verifier.verify(
-        this.initialUserMessage,
-        this.currentBlock,
-        acceptedMessage.content,
-        acceptedMessage.speaker,
-        this.currentConversationMessageCount
+          this.initialUserMessage,
+          this.currentBlock,
+          acceptedMessage.content,
+          acceptedMessage.speaker,
+          this.currentConversationMessageCount
       ).then(verification => {
-        this.userIntent = verification.user_intent;
-        if (verification.should_stop) {
-          this.shouldStopConversation = true;
-          this.stopReason = verification.stop_reason;
+          this.userIntent = verification.user_intent;
+          if (verification.should_stop) {
+            this.shouldStopConversation = true;
+            this.stopReason = verification.stop_reason;
           this.nextSpeaker = { id: "user", name: "User" };
-          console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
+            console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
 
-          // Notify UI about the stop
-          this.notifyBlock({
-            summary: this.currentBlock,
-            next: this.nextSpeaker,
-            stop_reason: this.stopReason,
-            user_intent: this.userIntent
-          });
-        }
+            // Notify UI about the stop
+            this.notifyBlock({
+              summary: this.currentBlock,
+              next: this.nextSpeaker,
+              stop_reason: this.stopReason,
+              user_intent: this.userIntent,
+            });
+          }
       }).catch(error => {
         console.error("Error in verification:", error);
-      });
+        });
 
       // Save to Redis
       this.saveMessagesToRedis(this.threadId);
@@ -352,6 +456,12 @@ Respond in JSON format only:
 
       console.log(`[AUTO] Round ${round + 1}/${maxRounds}: ${this.nextSpeaker.name} responding...`);
 
+      // Check again before agent responds
+      if (this.shouldStopConversation) {
+        console.log(`[AUTO] Stop flag detected before agent response, ending conversation`);
+        break;
+      }
+
       try {
         const mainHistory = this.messageDAG.getMainHistory();
         const content = await nextAgent.respond(mainHistory, lastMessage, this.currentBlock);
@@ -375,8 +485,21 @@ Respond in JSON format only:
         // Generate block and get next speaker recommendation
         const blockResult = await this.summarizeBlock(agentMessage);
         this.currentBlock = blockResult.summary;
-        this.nextSpeaker = blockResult.next;
-        this.notifyBlock(blockResult);
+
+        // Update next speaker only if verifier didn’t stop the conversation
+        if (!this.shouldStopConversation) {
+          this.nextSpeaker = blockResult.next;
+        } else {
+          console.log(`[AUTO] Keeping next speaker as user due to stop flag`);
+        }
+
+        // Notify with actual next speaker
+        this.notifyBlock({
+          summary: blockResult.summary,
+          next: this.nextSpeaker,
+          stop_reason: this.stopReason,
+          user_intent: this.userIntent,
+        });
 
         console.log(`[AUTO] ${nextAgent.getName()} responded. Next: ${this.nextSpeaker.name}`);
 
@@ -385,30 +508,30 @@ Respond in JSON format only:
 
         // Run verification in background (non-blocking)
         this.verifier.verify(
-          this.initialUserMessage,
-          this.currentBlock,
-          agentMessage.content,
-          agentMessage.speaker,
-          this.currentConversationMessageCount
+            this.initialUserMessage,
+            this.currentBlock,
+            agentMessage.content,
+            agentMessage.speaker,
+            this.currentConversationMessageCount
         ).then(verification => {
-          this.userIntent = verification.user_intent;
-          if (verification.should_stop) {
-            this.shouldStopConversation = true;
-            this.stopReason = verification.stop_reason;
-            this.nextSpeaker = { id: "user", name: "User" };
-            console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
+            this.userIntent = verification.user_intent;
+            if (verification.should_stop) {
+              this.shouldStopConversation = true;
+              this.stopReason = verification.stop_reason;
+              this.nextSpeaker = { id: "user", name: "User" };
+              console.log(`[Verifier] STOP flag set: ${this.stopReason}`);
 
-            // Notify UI about the stop
-            this.notifyBlock({
-              summary: this.currentBlock,
-              next: this.nextSpeaker,
-              stop_reason: this.stopReason,
-              user_intent: this.userIntent
-            });
-          }
+              // Notify UI about the stop
+              this.notifyBlock({
+                summary: this.currentBlock,
+                next: this.nextSpeaker,
+                stop_reason: this.stopReason,
+                user_intent: this.userIntent,
+              });
+            }
         }).catch(error => {
           console.error("Error in verification:", error);
-        });
+          });
 
         // Update for next iteration
         lastMessage = agentMessage;
