@@ -4,7 +4,7 @@ services:
   backend:
     container_name: a2a-orchestrator-backend-prod
     ports:
-      - "3001:3001"
+      - "3002:3001"
     env_file:
       - .env.prod
     # Uses external Redis via host.docker.internal:6379
