@@ -320,28 +320,15 @@ Respond in JSON format only:
   }
 
   /**
-   * Broadcast user message to relevant agents (parallel responses)
-   * Uses LLM to select agents mentioned or related to the message
-   * Falls back to random selection (1-4 agents) if no relevant agents found
+   * Broadcast user message to randomly selected agents (parallel responses)
+   * Randomly selects 1-4 agents from the available agents
    */
   async broadcastToAgents(userMessage: Message) {
-    // Use LLM to select relevant agents
-    const relevantAgents = await this.selectRelevantAgents(userMessage);
+    const numAgentsToSelect = Math.floor(Math.random() * 4) + 1; // Random number between 1 and 4
+    const selectedAgents = this.selectRandomAgents(numAgentsToSelect);
 
-    let selectedAgents: Agent[];
-
-    if (relevantAgents.length > 0) {
-      // Use LLM-selected agents
-      selectedAgents = relevantAgents;
-      console.log(`\n[BROADCAST] LLM selected ${selectedAgents.length} relevant agent(s) (out of ${this.agents.length})...`);
-      console.log(`[BROADCAST] Selected agents: ${selectedAgents.map(a => a.getName()).join(', ')}`);
-    } else {
-      // Fallback to random selection
-      const numAgentsToSelect = Math.floor(Math.random() * 4) + 1; // Random number between 1 and 4
-      selectedAgents = this.selectRandomAgents(numAgentsToSelect);
-      console.log(`\n[BROADCAST] No relevant agents found, randomly selecting ${selectedAgents.length} agent(s) (out of ${this.agents.length})...`);
-      console.log(`[BROADCAST] Selected agents: ${selectedAgents.map(a => a.getName()).join(', ')}`);
-    }
+    console.log(`\n[BROADCAST] Broadcasting to ${selectedAgents.length} randomly selected agents (out of ${this.agents.length})...`);
+    console.log(`[BROADCAST] Selected agents: ${selectedAgents.map((a) => a.getName()).join(', ')}`);
 
     // Request responses from selected agents in parallel
     const responsePromises = selectedAgents.map(agent =>
