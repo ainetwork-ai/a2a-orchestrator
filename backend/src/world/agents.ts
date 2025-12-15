@@ -75,7 +75,13 @@ export class Agent {
       // Parse response (handle different JSON-RPC formats)
       if (response && typeof response === "object") {
         if ("result" in response && response.result && typeof response.result === "object" && "kind" in response.result) {
-          responseMessage = response.result;
+          const { result } = response;
+          if ("status" in result && "message" in result.status) {
+            // ain-adk response
+            responseMessage = result.status.message;
+          } else {
+            responseMessage = result;
+          }
         } else if ("result" in response && response.result && typeof response.result === "object" && "message" in response.result) {
           responseMessage = response.result.message;
         } else if ("message" in response) {
