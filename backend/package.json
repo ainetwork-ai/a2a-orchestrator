@@ -1,6 +1,6 @@
 {
   "name": "a2a-orchestrator-backend",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Backend server for A2A Orchestrator",
   "main": "dist/server.js",
   "scripts": {
