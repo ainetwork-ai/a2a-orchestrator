@@ -73,6 +73,7 @@ export class Agent {
       let responseMessage = null;
 
       // Parse response (handle different JSON-RPC formats)
+      // TODO(yoojin): check response by type
       if (response && typeof response === "object") {
         if ("result" in response && response.result && typeof response.result === "object" && "kind" in response.result) {
           const { result } = response;
