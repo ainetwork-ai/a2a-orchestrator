@@ -20,6 +20,7 @@ export interface Thread {
   agents: AgentPersona[];
   createdAt: number;
   updatedAt: number;
+  userId?: string;
 }
 
 export interface ThreadAgent {

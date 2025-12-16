@@ -30,7 +30,7 @@ export class Agent {
     return this.a2aClient;
   }
 
-  async respond(history: Message[], recentMessage: Message, currentBlock: string = ""): Promise<string> {
+  async respond(history: Message[], recentMessage: Message, currentBlock: string = "", metadata: { [key: string]: string } = {}): Promise<string> {
     // Build user prompt with block and new message
     let userPrompt = "";
 
@@ -53,6 +53,7 @@ export class Agent {
         messageId: uuidv4(),
         role: "user",
         parts: [{ kind: "text", text: userPrompt }],
+        metadata,
       };
 
       // Include contextId if available for conversation continuity

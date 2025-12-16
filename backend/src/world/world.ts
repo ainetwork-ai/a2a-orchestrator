@@ -29,11 +29,13 @@ export class World {
   private stopReason: string = "";
   private userIntent: string = "";
   private currentConversationMessageCount: number = 0; // Count messages since last user message
+  private userId?: string;
 
-  constructor(apiUrl: string, model: string, threadId: string, agentPersonas?: AgentPersona[]) {
+  constructor(apiUrl: string, model: string, threadId: string, agentPersonas?: AgentPersona[], userId?: string) {
     this.apiUrl = apiUrl;
     this.model = model;
     this.threadId = threadId;
+    this.userId = userId;
     // Use provided personas or default to empty array
     const personas = agentPersonas && agentPersonas.length > 0 ? agentPersonas : [];
     this.agents = personas.map((persona: AgentPersona) => new Agent(persona));
@@ -122,8 +124,6 @@ export class World {
       const persona = agent.getPersona();
       return `- ID: ${persona.name}, Name: ${persona.name}, Role: ${persona.role}`;
     }).join('\n');
-
-    const agentsList = this.agents.map(agent => agent.getName()).join(", ");
 
     const prompt = `Analyze the following user message and select agents that are relevant to respond.
 
@@ -464,7 +464,10 @@ Respond in JSON format only:
 
       try {
         const mainHistory = this.messageDAG.getMainHistory();
-        const content = await nextAgent.respond(mainHistory, lastMessage, this.currentBlock);
+        const metadata = {
+          userId: this.userId || "",
+        };
+        const content = await nextAgent.respond(mainHistory, lastMessage, this.currentBlock, metadata);
         const timestamp = Date.now();
 
         const agentMessage: Message = {
@@ -594,7 +597,10 @@ Respond in JSON format only:
 
     try {
       const mainHistory = this.messageDAG.getMainHistory();
-      const content = await agent.respond(mainHistory, userMessage, this.currentBlock);
+      const metadata = {
+        userId: this.userId || "",
+      };
+      const content = await agent.respond(mainHistory, userMessage, this.currentBlock, metadata);
       const timestamp = Date.now();
 
       // Check if this is the first response for this user message
