@@ -42,6 +42,35 @@ class ThreadManager {
     }
   }
 
+  async saveUserIdToRedis(threadId: string, userId: string): Promise<void> {
+    try {
+      const redis = getRedisClient();
+      
+      const threadData = await redis.get(`thread:${threadId}`);
+      if (!threadData) {
+        console.warn(`[ThreadManager] Thread ${threadId} not found in Redis`);
+        return;
+      }
+
+      const thread: Thread = JSON.parse(threadData);
+      
+      thread.userId = userId;
+      thread.updatedAt = Date.now();
+
+      await redis.set(`thread:${threadId}`, JSON.stringify(thread));
+
+      const memoryThread = this.threads.get(threadId);
+      if (memoryThread) {
+        memoryThread.userId = userId;
+        memoryThread.updatedAt = thread.updatedAt;
+      }
+
+      console.log(`[ThreadManager] Saved userId to thread ${threadId}`);
+    } catch (error) {
+      console.error(`[ThreadManager] Error saving userId to Redis:`, error);
+    }
+  }
+
   /**
    * Load threads from Redis
    */
@@ -57,7 +86,7 @@ class ThreadManager {
           this.threads.set(thread.id, thread);
 
           // Create World instance for this thread
-          const world = new World(this.apiUrl, this.model, thread.id, thread.agents);
+          const world = new World(this.apiUrl, this.model, thread.id, thread.agents, thread.userId);
           this.worlds.set(thread.id, world);
 
           // Load messages for this thread
@@ -74,19 +103,20 @@ class ThreadManager {
   /**
    * Create a new thread
    */
-  createThread(name: string, agents: AgentPersona[] = []): Thread {
+  createThread(name: string, userId: string, agents: AgentPersona[] = []): Thread {
     const thread: Thread = {
       id: uuidv4(),
       name,
       agents,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      userId,
     };
 
     this.threads.set(thread.id, thread);
 
     // Create a new World instance for this thread
-    const world = new World(this.apiUrl, this.model, thread.id, agents);
+    const world = new World(this.apiUrl, this.model, thread.id, agents, userId);
     this.worlds.set(thread.id, world);
 
     // Save to Redis

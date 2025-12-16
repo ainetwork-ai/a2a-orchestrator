@@ -25,16 +25,23 @@ router.get("/", (req: Request, res: Response) => {
 // Create a new thread
 router.post("/", (req: Request, res: Response) => {
   try {
-    const { name, agents } = req.body;
+    const { name, agents, userId } = req.body;
 
+    // NOTE(yoojin): 새로 만드는 thread 부터는 반드시 userId가 필요함.
     if (!name) {
       return res.status(400).json({
         error: "Thread name is required"
       });
     }
 
+    if (!userId) {
+      return res.status(400).json({
+        error: "userId is required"
+      });
+    }
+
     const threadManager = ThreadManager.getInstance();
-    const thread = threadManager.createThread(name, agents || []);
+    const thread = threadManager.createThread(name, userId, agents || []);
 
     res.json({
       success: true,
@@ -49,16 +56,26 @@ router.post("/", (req: Request, res: Response) => {
 });
 
 // Get a specific thread
-router.get("/:threadId", (req: Request, res: Response) => {
+router.get("/:threadId", async (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
     const threadManager = ThreadManager.getInstance();
     const thread = threadManager.getThread(threadId);
-
+    
     if (!thread) {
       return res.status(404).json({
         error: "Thread not found"
       });
+    }
+
+    if (!thread.userId) {
+      // NOTE(yoojin): 쿼리 파라미터에서 userId를 받아서 저장
+      // 일단은 /:threadId?userId=... 형태로 받으나, 어떻게 변경할지 고민 필요.
+      const { userId } = req.query;
+      if (userId && typeof userId === 'string') {
+        await threadManager.saveUserIdToRedis(threadId, userId);
+        thread.userId = userId;
+      }
     }
 
     res.json({
