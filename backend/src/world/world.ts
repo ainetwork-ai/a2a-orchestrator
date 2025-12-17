@@ -464,6 +464,8 @@ Respond in JSON format only:
 
       try {
         const mainHistory = this.messageDAG.getMainHistory();
+      console.log(`[PROCESS AGENT RESPONSES QUEUE] userId: ${JSON.stringify(this.userId)}`);
+
         const metadata = {
           userId: this.userId || "",
         };
@@ -597,6 +599,7 @@ Respond in JSON format only:
 
     try {
       const mainHistory = this.messageDAG.getMainHistory();
+      console.log(`[PROCESS SPECIFIC AGENT] userId: ${JSON.stringify(this.userId)}`);
       const metadata = {
         userId: this.userId || "",
       };
