@@ -4,7 +4,9 @@ import dotenv from "dotenv";
 import chatRouter from "./routes/chat";
 import threadsRouter from "./routes/threads";
 import agentsRouter from "./routes/agents";
+import reportsRouter from "./routes/reports";
 import ThreadManager from "./world/threadManager";
+import ReportService from "./services/reportService";
 import { initRedis } from "./utils/redis";
 
 // Load environment variables
@@ -26,6 +28,10 @@ async function initialize() {
   // Initialize ThreadManager
   ThreadManager.initialize(apiUrl, model);
   console.log("✅ ThreadManager initialized");
+
+  // Initialize ReportService
+  ReportService.initialize(apiUrl, model);
+  console.log("✅ ReportService initialized");
 
   // Load existing threads from Redis
   const threadManager = ThreadManager.getInstance();
@@ -70,6 +76,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/chat", chatRouter);
 app.use("/api/threads", threadsRouter);
 app.use("/api/agents", agentsRouter);
+app.use("/api/reports", reportsRouter);
 
 // Error handling middleware
 app.use(
@@ -97,6 +104,8 @@ initialize().then(() => {
     console.log(`   - POST   http://localhost:${PORT}/api/threads/:id/messages`);
     console.log(`   - GET    http://localhost:${PORT}/api/threads/:id/stream`);
     console.log(`   - POST   http://localhost:${PORT}/api/agents/import`);
+    console.log(`   - POST   http://localhost:${PORT}/api/reports`);
+    console.log(`   - GET    http://localhost:${PORT}/api/reports/:jobId`);
     console.log(`   - GET    http://localhost:${PORT}/api/health`);
     console.log(`\n🌍 Allowed origins: ${allowedOrigins.join(", ")}\n`);
   });
