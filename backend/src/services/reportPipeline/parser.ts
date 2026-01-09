@@ -1,9 +1,16 @@
 import ThreadManager from "../../world/threadManager";
 import { Message } from "../../types";
-import { ParsedMessage, ParserResult, ReportRequestParams } from "../../types/report";
+import {
+  ParsedMessage,
+  ParserResult,
+  ReportRequestParams,
+  DEFAULT_MAX_MESSAGES,
+  DEFAULT_DATE_RANGE_DAYS,
+} from "../../types/report";
 
 /**
  * Parse threads and extract user messages with anonymization
+ * Applies date filtering and sampling if message count exceeds limit
  */
 export async function parseThreads(params: ReportRequestParams): Promise<ParserResult> {
   const threadManager = ThreadManager.getInstance();
@@ -15,6 +22,14 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
   if (params.threadIds && params.threadIds.length > 0) {
     threads = threads.filter(t => params.threadIds!.includes(t.id));
   }
+
+  // Apply default date range if not specified (last 30 days)
+  const endDate = params.endDate || Date.now();
+  const startDate = params.startDate || (endDate - DEFAULT_DATE_RANGE_DAYS * 24 * 60 * 60 * 1000);
+  const maxMessages = params.maxMessages || DEFAULT_MAX_MESSAGES;
+
+  console.log(`[Parser] Date range: ${new Date(startDate).toISOString()} ~ ${new Date(endDate).toISOString()}`);
+  console.log(`[Parser] Max messages: ${maxMessages}`);
 
   const parsedMessages: ParsedMessage[] = [];
 
@@ -28,9 +43,9 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
     const userMessages = messages.filter(m => m.speaker === "User");
 
     for (const msg of userMessages) {
-      // Apply date filter if provided
-      if (params.startDate && msg.timestamp < params.startDate) continue;
-      if (params.endDate && msg.timestamp > params.endDate) continue;
+      // Apply date filter
+      if (msg.timestamp < startDate) continue;
+      if (msg.timestamp > endDate) continue;
 
       // Anonymize: remove any potential PII from content
       const anonymizedContent = anonymizeContent(msg.content);
@@ -44,13 +59,54 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
     }
   }
 
-  // Sort by timestamp
-  parsedMessages.sort((a, b) => a.timestamp - b.timestamp);
+  // Sort by timestamp (newest first for sampling priority)
+  parsedMessages.sort((a, b) => b.timestamp - a.timestamp);
+
+  const totalMessagesBeforeSampling = parsedMessages.length;
+  let wasSampled = false;
+
+  // Sample if exceeds max messages
+  let finalMessages = parsedMessages;
+  if (parsedMessages.length > maxMessages) {
+    console.log(`[Parser] Sampling ${maxMessages} from ${parsedMessages.length} messages`);
+    finalMessages = sampleMessages(parsedMessages, maxMessages);
+    wasSampled = true;
+  }
+
+  // Re-sort by timestamp ascending for analysis
+  finalMessages.sort((a, b) => a.timestamp - b.timestamp);
+
+  console.log(`[Parser] Result: ${finalMessages.length} messages from ${threads.length} threads (sampled: ${wasSampled})`);
 
   return {
-    messages: parsedMessages,
+    messages: finalMessages,
     threadCount: threads.length,
+    totalMessagesBeforeSampling,
+    wasSampled,
   };
+}
+
+/**
+ * Sample messages with stratified approach
+ * - Takes recent messages with higher priority
+ * - Ensures temporal distribution
+ */
+function sampleMessages(messages: ParsedMessage[], maxCount: number): ParsedMessage[] {
+  if (messages.length <= maxCount) return messages;
+
+  // Strategy: 70% recent, 30% random from older
+  const recentCount = Math.floor(maxCount * 0.7);
+  const randomCount = maxCount - recentCount;
+
+  // Messages are already sorted newest first
+  const recentMessages = messages.slice(0, recentCount);
+  const olderMessages = messages.slice(recentCount);
+
+  // Random sample from older messages
+  const shuffledOlder = olderMessages.sort(() => Math.random() - 0.5);
+  const sampledOlder = shuffledOlder.slice(0, randomCount);
+
+  return [...recentMessages, ...sampledOlder];
 }
 
 /**

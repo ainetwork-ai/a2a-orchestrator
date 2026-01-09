@@ -37,6 +37,9 @@ export interface ReportStatistics {
     percentage: number;
   }>;
   averageMessagesPerThread: number;
+  // Sampling info
+  totalMessagesBeforeSampling: number;
+  wasSampled: boolean;
 }
 
 export interface Report {
@@ -75,12 +78,18 @@ export interface ReportRequestParams {
   threadIds?: string[]; // Specific threads to analyze, or all if empty
   startDate?: number;
   endDate?: number;
+  maxMessages?: number; // Max messages to analyze (default: 1000, will sample if exceeded)
 }
+
+export const DEFAULT_MAX_MESSAGES = 1000;
+export const DEFAULT_DATE_RANGE_DAYS = 30; // Default to last 30 days if no date specified
 
 // Pipeline step results
 export interface ParserResult {
   messages: ParsedMessage[];
   threadCount: number;
+  totalMessagesBeforeSampling: number; // Original count before sampling
+  wasSampled: boolean;
 }
 
 export interface CategorizerResult {
