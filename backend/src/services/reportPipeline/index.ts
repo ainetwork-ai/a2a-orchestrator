@@ -63,6 +63,8 @@ export async function generateReport(
         sentimentDistribution: { positive: 0, negative: 0, neutral: 0 },
         topTopics: [],
         averageMessagesPerThread: 0,
+        totalMessagesBeforeSampling: 0,
+        wasSampled: false,
       },
       clusters: [],
       markdown: "# Report\n\nNo user messages found to analyze.",
@@ -95,7 +97,9 @@ export async function generateReport(
   const analyzerResult = analyzeData(
     categorizerResult.messages,
     clustererResult.clusters,
-    parserResult.threadCount
+    parserResult.threadCount,
+    parserResult.totalMessagesBeforeSampling,
+    parserResult.wasSampled
   );
 
   // Step 5: Render markdown report

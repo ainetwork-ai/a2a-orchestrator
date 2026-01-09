@@ -19,10 +19,18 @@ export function renderMarkdown(
   // Executive Summary
   lines.push("## Executive Summary");
   lines.push("");
-  lines.push(`- **Total Messages Analyzed**: ${statistics.totalMessages}`);
+  if (statistics.wasSampled) {
+    lines.push(`- **Total Messages Analyzed**: ${statistics.totalMessages} (sampled from ${statistics.totalMessagesBeforeSampling})`);
+  } else {
+    lines.push(`- **Total Messages Analyzed**: ${statistics.totalMessages}`);
+  }
   lines.push(`- **Total Threads**: ${statistics.totalThreads}`);
   lines.push(`- **Average Messages per Thread**: ${statistics.averageMessagesPerThread.toFixed(1)}`);
   lines.push(`- **Analysis Period**: ${formatDateRange(statistics.dateRange)}`);
+  if (statistics.wasSampled) {
+    lines.push("");
+    lines.push(`> **Note**: This report is based on a representative sample. ${statistics.totalMessagesBeforeSampling - statistics.totalMessages} messages were excluded to optimize analysis.`);
+  }
   lines.push("");
 
   // Sentiment Overview

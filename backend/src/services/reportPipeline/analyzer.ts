@@ -6,7 +6,9 @@ import { CategorizedMessage, MessageCluster, ReportStatistics, AnalyzerResult } 
 export function analyzeData(
   messages: CategorizedMessage[],
   clusters: MessageCluster[],
-  threadCount: number
+  threadCount: number,
+  totalMessagesBeforeSampling: number,
+  wasSampled: boolean
 ): AnalyzerResult {
   const statistics: ReportStatistics = {
     totalMessages: messages.length,
@@ -16,6 +18,8 @@ export function analyzeData(
     sentimentDistribution: calculateSentimentDistribution(messages),
     topTopics: calculateTopTopics(clusters),
     averageMessagesPerThread: threadCount > 0 ? messages.length / threadCount : 0,
+    totalMessagesBeforeSampling,
+    wasSampled,
   };
 
   return { statistics };
