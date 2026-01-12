@@ -146,8 +146,8 @@ router.delete("/cache", async (req: Request, res: Response) => {
       threadIds || startDate || endDate
         ? {
             threadIds: threadIds || undefined,
-            startDate: startDate ? Number(startDate) : undefined,
-            endDate: endDate ? Number(endDate) : undefined,
+            startDate: startDate || undefined,
+            endDate: endDate || undefined,
           }
         : undefined;
 

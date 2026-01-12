@@ -12,6 +12,8 @@ export interface CategorizedMessage extends ParsedMessage {
   subCategory?: string;
   intent?: string;
   sentiment?: "positive" | "negative" | "neutral";
+  // Whether the message has analytical value (not just greeting/chitchat)
+  isSubstantive: boolean;
 }
 
 export interface MessageCluster {
@@ -40,6 +42,8 @@ export interface ReportStatistics {
   // Sampling info
   totalMessagesBeforeSampling: number;
   wasSampled: boolean;
+  // Filtering info
+  nonSubstantiveCount: number; // Messages filtered out (greetings, chitchat)
 }
 
 export interface Report {
@@ -76,13 +80,14 @@ export interface ReportJob {
 
 export interface ReportRequestParams {
   threadIds?: string[]; // Specific threads to analyze, or all if empty
-  startDate?: string;
-  endDate?: string;
+  startDate?: string; // ISO date string
+  endDate?: string; // ISO date string
   maxMessages?: number; // Max messages to analyze (default: 1000, will sample if exceeded)
 }
 
 export const DEFAULT_MAX_MESSAGES = 1000;
 export const DEFAULT_DATE_RANGE_DAYS = 30; // Default to last 30 days if no date specified
+export const MIN_MESSAGE_LENGTH = 7; // Minimum message length to include (filters out "Hi", "ㅇㅇ", etc.)
 
 // Pipeline step results
 export interface ParserResult {

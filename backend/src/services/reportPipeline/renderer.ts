@@ -27,9 +27,16 @@ export function renderMarkdown(
   lines.push(`- **Total Threads**: ${statistics.totalThreads}`);
   lines.push(`- **Average Messages per Thread**: ${statistics.averageMessagesPerThread.toFixed(1)}`);
   lines.push(`- **Analysis Period**: ${formatDateRange(statistics.dateRange)}`);
-  if (statistics.wasSampled) {
+  if (statistics.wasSampled || statistics.nonSubstantiveCount > 0) {
     lines.push("");
-    lines.push(`> **Note**: This report is based on a representative sample. ${statistics.totalMessagesBeforeSampling - statistics.totalMessages} messages were excluded to optimize analysis.`);
+    const notes: string[] = [];
+    if (statistics.wasSampled) {
+      notes.push(`Sampled from ${statistics.totalMessagesBeforeSampling} total messages`);
+    }
+    if (statistics.nonSubstantiveCount > 0) {
+      notes.push(`${statistics.nonSubstantiveCount} non-substantive messages (greetings/chitchat) excluded`);
+    }
+    lines.push(`> **Note**: ${notes.join(". ")}.`);
   }
   lines.push("");
 

@@ -8,7 +8,8 @@ export function analyzeData(
   clusters: MessageCluster[],
   threadCount: number,
   totalMessagesBeforeSampling: number,
-  wasSampled: boolean
+  wasSampled: boolean,
+  nonSubstantiveCount: number
 ): AnalyzerResult {
   const statistics: ReportStatistics = {
     totalMessages: messages.length,
@@ -20,6 +21,7 @@ export function analyzeData(
     averageMessagesPerThread: threadCount > 0 ? messages.length / threadCount : 0,
     totalMessagesBeforeSampling,
     wasSampled,
+    nonSubstantiveCount,
   };
 
   return { statistics };

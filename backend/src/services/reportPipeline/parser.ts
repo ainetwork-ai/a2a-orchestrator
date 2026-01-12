@@ -6,6 +6,7 @@ import {
   ReportRequestParams,
   DEFAULT_MAX_MESSAGES,
   DEFAULT_DATE_RANGE_DAYS,
+  MIN_MESSAGE_LENGTH,
 } from "../../types/report";
 
 /**
@@ -24,8 +25,11 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
   }
 
   // Apply default date range if not specified (last 30 days)
-  const endDate = params.endDate || Date.now();
-  const startDate = params.startDate || (endDate - DEFAULT_DATE_RANGE_DAYS * 24 * 60 * 60 * 1000);
+  const now = Date.now();
+  const endDate = params.endDate ? new Date(params.endDate).getTime() : now;
+  const startDate = params.startDate
+    ? new Date(params.startDate).getTime()
+    : endDate - DEFAULT_DATE_RANGE_DAYS * 24 * 60 * 60 * 1000;
   const maxMessages = params.maxMessages || DEFAULT_MAX_MESSAGES;
 
   console.log(`[Parser] Date range: ${new Date(startDate).toISOString()} ~ ${new Date(endDate).toISOString()}`);
@@ -47,8 +51,14 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
       if (msg.timestamp < startDate) continue;
       if (msg.timestamp > endDate) continue;
 
+      // Filter out too short messages (likely greetings/noise)
+      const trimmedContent = msg.content.trim();
+      if (trimmedContent.length < MIN_MESSAGE_LENGTH) {
+        continue;
+      }
+
       // Anonymize: remove any potential PII from content
-      const anonymizedContent = anonymizeContent(msg.content);
+      const anonymizedContent = anonymizeContent(trimmedContent);
 
       parsedMessages.push({
         id: msg.id,

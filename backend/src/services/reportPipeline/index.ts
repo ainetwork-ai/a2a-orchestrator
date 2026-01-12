@@ -65,6 +65,7 @@ export async function generateReport(
         averageMessagesPerThread: 0,
         totalMessagesBeforeSampling: 0,
         wasSampled: false,
+        nonSubstantiveCount: 0,
       },
       clusters: [],
       markdown: "# Report\n\nNo user messages found to analyze.",
@@ -81,11 +82,16 @@ export async function generateReport(
   );
   console.log(`[ReportPipeline] Categorized ${categorizerResult.messages.length} messages`);
 
-  // Step 3: Cluster messages by topic
+  // Filter out non-substantive messages for clustering
+  const substantiveMessages = categorizerResult.messages.filter(m => m.isSubstantive);
+  const filteredCount = categorizerResult.messages.length - substantiveMessages.length;
+  console.log(`[ReportPipeline] Filtered ${filteredCount} non-substantive messages (greetings/chitchat)`);
+
+  // Step 3: Cluster messages by topic (only substantive messages)
   updateProgress(3);
   console.log(`[ReportPipeline] Step 3: ${STEPS[2]}`);
   const clustererResult = await clusterMessages(
-    categorizerResult.messages,
+    substantiveMessages,
     apiUrl,
     model
   );
@@ -95,11 +101,12 @@ export async function generateReport(
   updateProgress(4);
   console.log(`[ReportPipeline] Step 4: ${STEPS[3]}`);
   const analyzerResult = analyzeData(
-    categorizerResult.messages,
+    substantiveMessages, // Use only substantive messages for stats
     clustererResult.clusters,
     parserResult.threadCount,
     parserResult.totalMessagesBeforeSampling,
-    parserResult.wasSampled
+    parserResult.wasSampled,
+    filteredCount
   );
 
   // Step 5: Render markdown report
