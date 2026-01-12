@@ -76,8 +76,8 @@ export interface ReportJob {
 
 export interface ReportRequestParams {
   threadIds?: string[]; // Specific threads to analyze, or all if empty
-  startDate?: number;
-  endDate?: number;
+  startDate?: string;
+  endDate?: string;
   maxMessages?: number; // Max messages to analyze (default: 1000, will sample if exceeded)
 }
 

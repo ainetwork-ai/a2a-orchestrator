@@ -24,8 +24,8 @@ router.post("/", async (req: Request, res: Response) => {
 
     const params: ReportRequestParams = {
       threadIds: threadIds || undefined,
-      startDate: startDate ? Number(startDate) : undefined,
-      endDate: endDate ? Number(endDate) : undefined,
+      startDate,
+      endDate,
     };
 
     const reportService = ReportService.getInstance();
