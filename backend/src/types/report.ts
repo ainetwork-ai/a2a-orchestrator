@@ -78,11 +78,15 @@ export interface ReportJob {
   params: ReportRequestParams;
 }
 
+export type ReportLanguage = "ko" | "en";
+
 export interface ReportRequestParams {
   threadIds?: string[]; // Specific threads to analyze, or all if empty
   startDate?: string; // ISO date string
   endDate?: string; // ISO date string
   maxMessages?: number; // Max messages to analyze (default: 1000, will sample if exceeded)
+  timezone?: string; // IANA timezone (e.g., "Asia/Seoul", "America/New_York")
+  language?: ReportLanguage; // Report language (defaults based on timezone if not specified)
 }
 
 export const DEFAULT_MAX_MESSAGES = 1000;

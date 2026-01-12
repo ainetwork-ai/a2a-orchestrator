@@ -115,7 +115,7 @@ export async function generateReport(
   const rendererResult = renderMarkdown(
     analyzerResult.statistics,
     clustererResult.clusters,
-    title
+    { timezone: params.timezone, language: params.language }
   );
 
   console.log(`[ReportPipeline] Report generation completed`);

@@ -20,12 +20,14 @@ const router = Router();
  */
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { threadIds, startDate, endDate } = req.body;
+    const { threadIds, startDate, endDate, timezone, language } = req.body;
 
     const params: ReportRequestParams = {
       threadIds: threadIds || undefined,
       startDate,
       endDate,
+      timezone,
+      language,
     };
 
     const reportService = ReportService.getInstance();
