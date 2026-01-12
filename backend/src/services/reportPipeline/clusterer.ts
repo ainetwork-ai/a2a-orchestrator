@@ -256,7 +256,17 @@ Respond in JSON format only:
     }
 
     const parsed = JSON.parse(jsonStr);
-    return parsed.opinions || [];
+    const opinions = parsed.opinions || [];
+
+    // Handle case where LLM returns objects instead of strings
+    return opinions.map((op: any) => {
+      if (typeof op === "string") return op;
+      // If object, try to extract meaningful text
+      if (typeof op === "object" && op !== null) {
+        return op.summary || op.opinion || op.text || op.content || JSON.stringify(op);
+      }
+      return String(op);
+    });
   } catch (error) {
     console.error("[Clusterer] Error summarizing opinions:", error);
     return [`${messages.length} messages about this topic`];
