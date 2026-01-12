@@ -93,37 +93,50 @@ async function assignMessagesToTopics(
     return [];
   }
 
-  // Process in batches
+  // Process in batches (parallel)
   const BATCH_SIZE = 20;
   const assignments: Map<string, CategorizedMessage[]> = new Map();
   topics.forEach(topic => assignments.set(topic, []));
 
+  // Create all batch promises in parallel
+  const batchPromises: Promise<Record<string, CategorizedMessage[]>>[] = [];
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     const batch = messages.slice(i, i + BATCH_SIZE);
-    const batchAssignments = await assignBatchToTopics(batch, topics, apiUrl, model);
+    batchPromises.push(assignBatchToTopics(batch, topics, apiUrl, model));
+  }
 
+  // Wait for all batches to complete
+  const batchResults = await Promise.all(batchPromises);
+
+  // Merge results
+  for (const batchAssignments of batchResults) {
     for (const [topic, msgs] of Object.entries(batchAssignments)) {
       const existing = assignments.get(topic) || [];
       assignments.set(topic, [...existing, ...msgs]);
     }
   }
 
-  // Create clusters and summarize opinions for each
-  const clusters: MessageCluster[] = [];
+  // Create clusters and summarize opinions for each (parallel)
+  const topicsWithMessages = Array.from(assignments.entries()).filter(
+    ([, msgs]) => msgs.length > 0
+  );
 
-  for (const [topic, topicMessages] of assignments) {
-    if (topicMessages.length === 0) continue;
+  // Summarize opinions in parallel
+  const opinionPromises = topicsWithMessages.map(([topic, topicMessages]) =>
+    summarizeOpinions(topicMessages, topic, apiUrl, model)
+  );
+  const opinionResults = await Promise.all(opinionPromises);
 
-    const opinions = await summarizeOpinions(topicMessages, topic, apiUrl, model);
-
-    clusters.push({
+  // Build clusters
+  const clusters: MessageCluster[] = topicsWithMessages.map(
+    ([topic, topicMessages], idx) => ({
       id: uuidv4(),
       topic,
       description: `Messages related to "${topic}"`,
       messages: topicMessages,
-      opinions,
-    });
-  }
+      opinions: opinionResults[idx],
+    })
+  );
 
   // Sort by message count (most discussed first)
   clusters.sort((a, b) => b.messages.length - a.messages.length);

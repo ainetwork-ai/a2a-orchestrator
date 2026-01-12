@@ -11,14 +11,17 @@ export async function categorizeMessages(
   apiUrl: string,
   model: string
 ): Promise<CategorizerResult> {
-  const categorizedMessages: CategorizedMessage[] = [];
+  // Create all batch promises in parallel
+  const batchPromises: Promise<CategorizedMessage[]>[] = [];
 
-  // Process in batches
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     const batch = messages.slice(i, i + BATCH_SIZE);
-    const batchResults = await categorizeBatch(batch, apiUrl, model);
-    categorizedMessages.push(...batchResults);
+    batchPromises.push(categorizeBatch(batch, apiUrl, model));
   }
+
+  // Wait for all batches to complete
+  const batchResults = await Promise.all(batchPromises);
+  const categorizedMessages = batchResults.flat();
 
   return { messages: categorizedMessages };
 }
