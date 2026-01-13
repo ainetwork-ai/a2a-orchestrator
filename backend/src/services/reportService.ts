@@ -224,6 +224,9 @@ class ReportService {
         await redis.del(`${CACHE_PREFIX}${cacheKey}`);
       } else {
         // Invalidate all report caches
+        // Note: redis.keys() blocks Redis during execution (O(N)).
+        // Acceptable here due to small number of report cache keys.
+        // For larger scale, consider SCAN or Lua script for atomic operations.
         const keys = await redis.keys(`${CACHE_PREFIX}*`);
         if (keys.length > 0) {
           await redis.del(keys);
