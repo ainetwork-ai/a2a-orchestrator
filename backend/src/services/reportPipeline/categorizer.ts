@@ -1,5 +1,5 @@
 import RequestManager from "../../world/requestManager";
-import { ParsedMessage, CategorizedMessage, CategorizerResult } from "../../types/report";
+import { ParsedMessage, CategorizedMessage, CategorizerResult, ReportLanguage } from "../../types/report";
 
 const BATCH_SIZE = 10; // Process messages in batches to reduce API calls
 
@@ -9,14 +9,15 @@ const BATCH_SIZE = 10; // Process messages in batches to reduce API calls
 export async function categorizeMessages(
   messages: ParsedMessage[],
   apiUrl: string,
-  model: string
+  model: string,
+  language: ReportLanguage = "en"
 ): Promise<CategorizerResult> {
   // Create all batch promises in parallel
   const batchPromises: Promise<CategorizedMessage[]>[] = [];
 
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     const batch = messages.slice(i, i + BATCH_SIZE);
-    batchPromises.push(categorizeBatch(batch, apiUrl, model));
+    batchPromises.push(categorizeBatch(batch, apiUrl, model, language));
   }
 
   // Wait for all batches to complete
@@ -29,14 +30,21 @@ export async function categorizeMessages(
 async function categorizeBatch(
   messages: ParsedMessage[],
   apiUrl: string,
-  model: string
+  model: string,
+  language: ReportLanguage
 ): Promise<CategorizedMessage[]> {
   const messagesForPrompt = messages.map((m, idx) => ({
     index: idx,
     content: m.content,
   }));
 
+  const langInstruction = language === "ko"
+    ? "IMPORTANT: Write all text fields (subCategory, intent) in Korean."
+    : "Write all text fields in English.";
+
   const prompt = `Analyze the following user messages and categorize each one.
+
+${langInstruction}
 
 Messages:
 ${JSON.stringify(messagesForPrompt, null, 2)}

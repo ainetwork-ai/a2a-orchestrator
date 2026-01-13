@@ -1,5 +1,5 @@
 import RequestManager from "../../world/requestManager";
-import { CategorizedMessage, MessageCluster, ClustererResult } from "../../types/report";
+import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage } from "../../types/report";
 import { v4 as uuidv4 } from "uuid";
 
 /**
@@ -8,17 +8,18 @@ import { v4 as uuidv4 } from "uuid";
 export async function clusterMessages(
   messages: CategorizedMessage[],
   apiUrl: string,
-  model: string
+  model: string,
+  language: ReportLanguage = "en"
 ): Promise<ClustererResult> {
   if (messages.length === 0) {
     return { clusters: [] };
   }
 
   // First, identify main topics
-  const topics = await identifyTopics(messages, apiUrl, model);
+  const topics = await identifyTopics(messages, apiUrl, model, language);
 
   // Then, assign messages to topics and gather opinions
-  const clusters = await assignMessagesToTopics(messages, topics, apiUrl, model);
+  const clusters = await assignMessagesToTopics(messages, topics, apiUrl, model, language);
 
   return { clusters };
 }
@@ -26,7 +27,8 @@ export async function clusterMessages(
 async function identifyTopics(
   messages: CategorizedMessage[],
   apiUrl: string,
-  model: string
+  model: string,
+  language: ReportLanguage
 ): Promise<string[]> {
   // Sample messages if too many (to reduce token usage)
   const sampleSize = Math.min(messages.length, 50);
@@ -36,7 +38,13 @@ async function identifyTopics(
 
   const messageContents = sampledMessages.map(m => m.content).join("\n---\n");
 
+  const langInstruction = language === "ko"
+    ? "IMPORTANT: Write all topic names and descriptions in Korean."
+    : "Write all topic names and descriptions in English.";
+
   const prompt = `Analyze the following user messages and identify the main topics/themes being discussed.
+
+${langInstruction}
 
 Messages:
 ${messageContents}
@@ -87,7 +95,8 @@ async function assignMessagesToTopics(
   messages: CategorizedMessage[],
   topics: string[],
   apiUrl: string,
-  model: string
+  model: string,
+  language: ReportLanguage
 ): Promise<MessageCluster[]> {
   if (topics.length === 0) {
     return [];
@@ -123,7 +132,7 @@ async function assignMessagesToTopics(
 
   // Summarize opinions in parallel
   const opinionPromises = topicsWithMessages.map(([topic, topicMessages]) =>
-    summarizeOpinions(topicMessages, topic, apiUrl, model)
+    summarizeOpinions(topicMessages, topic, apiUrl, model, language)
   );
   const opinionResults = await Promise.all(opinionPromises);
 
@@ -220,7 +229,8 @@ async function summarizeOpinions(
   messages: CategorizedMessage[],
   topic: string,
   apiUrl: string,
-  model: string
+  model: string,
+  language: ReportLanguage
 ): Promise<string[]> {
   if (messages.length === 0) return [];
 
@@ -232,7 +242,13 @@ async function summarizeOpinions(
 
   const messageContents = sampledMessages.map(m => m.content).join("\n---\n");
 
+  const langInstruction = language === "ko"
+    ? "IMPORTANT: Write all opinion summaries in Korean."
+    : "Write all opinion summaries in English.";
+
   const prompt = `Summarize the different opinions and perspectives expressed about "${topic}" in these messages.
+
+${langInstruction}
 
 Messages:
 ${messageContents}

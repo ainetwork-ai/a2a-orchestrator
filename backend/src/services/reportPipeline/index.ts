@@ -72,13 +72,17 @@ export async function generateReport(
     };
   }
 
+  // Determine language (default to "en")
+  const language = params.language || "en";
+
   // Step 2: Categorize messages using LLM
   updateProgress(2);
   console.log(`[ReportPipeline] Step 2: ${STEPS[1]}`);
   const categorizerResult = await categorizeMessages(
     parserResult.messages,
     apiUrl,
-    model
+    model,
+    language
   );
   console.log(`[ReportPipeline] Categorized ${categorizerResult.messages.length} messages`);
 
@@ -93,7 +97,8 @@ export async function generateReport(
   const clustererResult = await clusterMessages(
     substantiveMessages,
     apiUrl,
-    model
+    model,
+    language
   );
   console.log(`[ReportPipeline] Created ${clustererResult.clusters.length} clusters`);
 
