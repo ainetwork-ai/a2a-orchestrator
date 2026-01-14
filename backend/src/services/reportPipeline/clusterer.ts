@@ -1,5 +1,5 @@
 import RequestManager from "../../world/requestManager";
-import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage } from "../../types/report";
+import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage, ClusterSummary, ActionItem } from "../../types/report";
 import { v4 as uuidv4 } from "uuid";
 
 /**
@@ -139,13 +139,13 @@ async function assignMessagesToTopics(
     ([, msgs]) => msgs.length > 0
   );
 
-  // Summarize opinions in parallel
-  console.log(`[Clusterer] Summarizing opinions for ${topicsWithMessages.length} topics...`);
-  const opinionPromises = topicsWithMessages.map(([topic, topicMessages]) =>
-    summarizeOpinions(topicMessages, topic, apiUrl, model, language)
+  // Analyze clusters in parallel (opinions + summary + next steps)
+  console.log(`[Clusterer] Analyzing ${topicsWithMessages.length} clusters...`);
+  const analysisPromises = topicsWithMessages.map(([topic, topicMessages]) =>
+    analyzeCluster(topicMessages, topic, apiUrl, model, language)
   );
-  const opinionResults = await Promise.all(opinionPromises);
-  console.log("[Clusterer] Opinion summarization completed");
+  const analysisResults = await Promise.all(analysisPromises);
+  console.log("[Clusterer] Cluster analysis completed");
 
   // Build clusters
   const clusters: MessageCluster[] = topicsWithMessages.map(
@@ -154,7 +154,9 @@ async function assignMessagesToTopics(
       topic,
       description: `Messages related to "${topic}"`,
       messages: topicMessages,
-      opinions: opinionResults[idx],
+      opinions: analysisResults[idx].opinions,
+      summary: analysisResults[idx].summary,
+      nextSteps: analysisResults[idx].nextSteps,
     })
   );
 
@@ -236,14 +238,26 @@ Respond in JSON format only:
   }
 }
 
-async function summarizeOpinions(
+interface ClusterAnalysisResult {
+  opinions: string[];
+  summary: ClusterSummary;
+  nextSteps: ActionItem[];
+}
+
+async function analyzeCluster(
   messages: CategorizedMessage[],
   topic: string,
   apiUrl: string,
   model: string,
   language: ReportLanguage
-): Promise<string[]> {
-  if (messages.length === 0) return [];
+): Promise<ClusterAnalysisResult> {
+  const defaultResult: ClusterAnalysisResult = {
+    opinions: [`${messages.length} messages about this topic`],
+    summary: { consensus: [], conflicting: [], sentiment: "neutral" },
+    nextSteps: [],
+  };
+
+  if (messages.length === 0) return defaultResult;
 
   // Sample if too many messages
   const sampleSize = Math.min(messages.length, 30);
@@ -253,28 +267,48 @@ async function summarizeOpinions(
 
   const messageContents = sampledMessages.map(m => m.content).join("\n---\n");
 
-  const langInstruction = language === "ko"
-    ? "IMPORTANT: Write all opinion summaries in Korean."
-    : "Write all opinion summaries in English.";
+  // Calculate sentiment distribution for context
+  const sentimentCounts = { positive: 0, negative: 0, neutral: 0 };
+  for (const msg of messages) {
+    if (msg.sentiment) sentimentCounts[msg.sentiment]++;
+  }
 
-  const prompt = `Summarize the different opinions and perspectives expressed about "${topic}" in these messages.
+  const langInstruction = language === "ko"
+    ? "IMPORTANT: Write ALL text content in Korean."
+    : "Write all text content in English.";
+
+  const prompt = `Analyze the user feedback about "${topic}" and provide actionable insights.
 
 ${langInstruction}
 
-Messages:
+Messages (${messages.length} total, showing sample of ${sampledMessages.length}):
 ${messageContents}
 
+Sentiment distribution: ${sentimentCounts.positive} positive, ${sentimentCounts.negative} negative, ${sentimentCounts.neutral} neutral
+
 Instructions:
-1. Identify distinct opinions or viewpoints (not just restatements of the same opinion)
-2. Summarize each unique opinion in 1-2 sentences
-3. Include the general sentiment (positive/negative/neutral) for each opinion
-4. Return 3-7 main opinions
+1. Identify 3-7 distinct opinions expressed by users
+2. Summarize common opinions (consensus) and conflicting opinions (if any)
+3. Determine overall sentiment: "positive", "negative", "mixed", or "neutral"
+4. Suggest 1-3 actionable next steps based on the feedback, with priority (high/medium/low) and rationale
 
 Respond in JSON format only:
 {
   "opinions": [
-    "Opinion summary 1",
-    "Opinion summary 2"
+    "Opinion 1: ...",
+    "Opinion 2: ..."
+  ],
+  "summary": {
+    "consensus": ["Common opinion 1", "Common opinion 2"],
+    "conflicting": ["Some users want X while others prefer Y"],
+    "sentiment": "mixed"
+  },
+  "nextSteps": [
+    {
+      "action": "Specific action to take",
+      "priority": "high",
+      "rationale": "Why this is important based on user feedback"
+    }
   ]
 }`;
 
@@ -284,7 +318,7 @@ Respond in JSON format only:
       apiUrl,
       model,
       [{ role: "user", content: prompt }],
-      1000,
+      1500,
       0.5
     );
 
@@ -296,19 +330,33 @@ Respond in JSON format only:
     }
 
     const parsed = JSON.parse(jsonStr);
-    const opinions = parsed.opinions || [];
 
-    // Handle case where LLM returns objects instead of strings
-    return opinions.map((op: any) => {
+    // Extract opinions
+    const opinions = (parsed.opinions || []).map((op: any) => {
       if (typeof op === "string") return op;
-      // If object, try to extract meaningful text
       if (typeof op === "object" && op !== null) {
         return op.summary || op.opinion || op.text || op.content || JSON.stringify(op);
       }
       return String(op);
     });
+
+    // Extract summary
+    const summary: ClusterSummary = {
+      consensus: parsed.summary?.consensus || [],
+      conflicting: parsed.summary?.conflicting || [],
+      sentiment: parsed.summary?.sentiment || "neutral",
+    };
+
+    // Extract next steps
+    const nextSteps: ActionItem[] = (parsed.nextSteps || []).map((step: any) => ({
+      action: step.action || "",
+      priority: step.priority || "medium",
+      rationale: step.rationale || "",
+    })).filter((step: ActionItem) => step.action);
+
+    return { opinions, summary, nextSteps };
   } catch (error) {
-    console.error("[Clusterer] Error summarizing opinions:", error);
-    return [`${messages.length} messages about this topic`];
+    console.error("[Clusterer] Error analyzing cluster:", error);
+    return defaultResult;
   }
 }

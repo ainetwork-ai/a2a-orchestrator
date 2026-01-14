@@ -18,6 +18,7 @@ const i18n: Record<ReportLanguage, Record<string, string>> = {
     positive: "Positive",
     negative: "Negative",
     neutral: "Neutral",
+    mixed: "Mixed",
     categoryDistribution: "Category Distribution",
     category: "Category",
     count: "Count",
@@ -35,6 +36,18 @@ const i18n: Record<ReportLanguage, Record<string, string>> = {
     step2: "**Categorization**: LLM-based intent and sentiment classification",
     step3: "**Clustering**: Topic identification and message grouping",
     step4: "**Analysis**: Statistical aggregation and opinion summarization",
+    // New keys for summary & next steps
+    opinionSummary: "Opinion Summary",
+    consensus: "Consensus",
+    conflicting: "Conflicting Views",
+    overallSentiment: "Overall Sentiment",
+    recommendedActions: "Recommended Actions",
+    action: "Action",
+    priority: "Priority",
+    rationale: "Rationale",
+    priorityHigh: "High",
+    priorityMedium: "Medium",
+    priorityLow: "Low",
   },
   ko: {
     title: "사용자 대화 분석 리포트",
@@ -52,6 +65,7 @@ const i18n: Record<ReportLanguage, Record<string, string>> = {
     positive: "긍정",
     negative: "부정",
     neutral: "중립",
+    mixed: "혼합",
     categoryDistribution: "카테고리 분포",
     category: "카테고리",
     count: "개수",
@@ -69,6 +83,18 @@ const i18n: Record<ReportLanguage, Record<string, string>> = {
     step2: "**분류**: LLM 기반 의도 및 감정 분류",
     step3: "**클러스터링**: 토픽 식별 및 메시지 그룹화",
     step4: "**분석**: 통계 집계 및 의견 요약",
+    // New keys for summary & next steps
+    opinionSummary: "의견 요약",
+    consensus: "공통 의견",
+    conflicting: "상충 의견",
+    overallSentiment: "전체 감정",
+    recommendedActions: "제안 사항",
+    action: "액션",
+    priority: "우선순위",
+    rationale: "근거",
+    priorityHigh: "높음",
+    priorityMedium: "중간",
+    priorityLow: "낮음",
   },
 };
 
@@ -197,7 +223,7 @@ export function renderMarkdown(
   }
   lines.push("");
 
-  // Topic Details with Opinions
+  // Topic Details with Opinions, Summary, and Next Steps
   lines.push(`## ${t.topicAnalysis}`);
   lines.push("");
   for (const cluster of clusters) {
@@ -206,14 +232,68 @@ export function renderMarkdown(
     lines.push(`_${cluster.messages.length} ${t.messages}_`);
     lines.push("");
 
+    // Opinion Summary section
+    if (cluster.summary) {
+      lines.push(`**${t.opinionSummary}:**`);
+      lines.push("");
+
+      // Sentiment badge
+      const sentimentLabels: Record<string, string> = {
+        positive: t.positive,
+        negative: t.negative,
+        neutral: t.neutral,
+        mixed: t.mixed,
+      };
+      const sentimentEmoji = cluster.summary.sentiment === "positive" ? "🟢" :
+        cluster.summary.sentiment === "negative" ? "🔴" :
+        cluster.summary.sentiment === "mixed" ? "🟡" : "⚪";
+      lines.push(`${sentimentEmoji} **${t.overallSentiment}**: ${sentimentLabels[cluster.summary.sentiment] || cluster.summary.sentiment}`);
+      lines.push("");
+
+      // Consensus
+      if (cluster.summary.consensus.length > 0) {
+        lines.push(`**${t.consensus}:**`);
+        for (const item of cluster.summary.consensus) {
+          lines.push(`- ${item}`);
+        }
+        lines.push("");
+      }
+
+      // Conflicting views
+      if (cluster.summary.conflicting.length > 0) {
+        lines.push(`**${t.conflicting}:**`);
+        for (const item of cluster.summary.conflicting) {
+          lines.push(`- ${item}`);
+        }
+        lines.push("");
+      }
+    }
+
+    // Key opinions (detailed list)
     if (cluster.opinions.length > 0) {
       lines.push(`**${t.keyOpinions}:**`);
       lines.push("");
       for (const opinion of cluster.opinions) {
         lines.push(`- ${opinion}`);
       }
+      lines.push("");
     }
-    lines.push("");
+
+    // Next Steps / Recommended Actions
+    if (cluster.nextSteps && cluster.nextSteps.length > 0) {
+      lines.push(`**${t.recommendedActions}:**`);
+      lines.push("");
+      lines.push(`| ${t.priority} | ${t.action} | ${t.rationale} |`);
+      lines.push("|----------|--------|----------|");
+      for (const step of cluster.nextSteps) {
+        const priorityEmoji = step.priority === "high" ? "🔴" :
+          step.priority === "medium" ? "🟡" : "🟢";
+        const priorityLabel = step.priority === "high" ? t.priorityHigh :
+          step.priority === "medium" ? t.priorityMedium : t.priorityLow;
+        lines.push(`| ${priorityEmoji} ${priorityLabel} | ${step.action} | ${step.rationale} |`);
+      }
+      lines.push("");
+    }
 
     // Sample messages (up to 3)
     const sampleMessages = cluster.messages.slice(0, 3);

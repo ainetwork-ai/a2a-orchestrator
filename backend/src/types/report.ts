@@ -16,12 +16,26 @@ export interface CategorizedMessage extends ParsedMessage {
   isSubstantive: boolean;
 }
 
+export interface ClusterSummary {
+  consensus: string[];      // Common opinions
+  conflicting: string[];    // Conflicting opinions (if any)
+  sentiment: "positive" | "negative" | "mixed" | "neutral";
+}
+
+export interface ActionItem {
+  action: string;           // e.g., "Improve loading speed"
+  priority: "high" | "medium" | "low";
+  rationale: string;        // e.g., "Many complaints, churn risk"
+}
+
 export interface MessageCluster {
   id: string;
   topic: string;
   description: string;
   messages: CategorizedMessage[];
   opinions: string[]; // Summary of different opinions in this cluster
+  summary: ClusterSummary;
+  nextSteps: ActionItem[];
 }
 
 export interface ReportStatistics {
