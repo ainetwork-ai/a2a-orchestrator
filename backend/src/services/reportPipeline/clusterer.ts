@@ -11,15 +11,22 @@ export async function clusterMessages(
   model: string,
   language: ReportLanguage = "en"
 ): Promise<ClustererResult> {
+  console.log(`[Clusterer] Starting clustering: ${messages.length} messages, language=${language}`);
+
   if (messages.length === 0) {
+    console.warn("[Clusterer] No substantive messages to cluster");
     return { clusters: [] };
   }
 
   // First, identify main topics
+  console.log("[Clusterer] Step 1: Identifying topics...");
   const topics = await identifyTopics(messages, apiUrl, model, language);
+  console.log(`[Clusterer] Identified ${topics.length} topics:`, topics);
 
   // Then, assign messages to topics and gather opinions
+  console.log("[Clusterer] Step 2: Assigning messages to topics...");
   const clusters = await assignMessagesToTopics(messages, topics, apiUrl, model, language);
+  console.log(`[Clusterer] Created ${clusters.length} clusters`);
 
   return { clusters };
 }
@@ -113,9 +120,11 @@ async function assignMessagesToTopics(
     const batch = messages.slice(i, i + BATCH_SIZE);
     batchPromises.push(assignBatchToTopics(batch, topics, apiUrl, model));
   }
+  console.log(`[Clusterer] Created ${batchPromises.length} assignment batch promises`);
 
   // Wait for all batches to complete
   const batchResults = await Promise.all(batchPromises);
+  console.log("[Clusterer] All assignment batches completed");
 
   // Merge results
   for (const batchAssignments of batchResults) {
@@ -131,10 +140,12 @@ async function assignMessagesToTopics(
   );
 
   // Summarize opinions in parallel
+  console.log(`[Clusterer] Summarizing opinions for ${topicsWithMessages.length} topics...`);
   const opinionPromises = topicsWithMessages.map(([topic, topicMessages]) =>
     summarizeOpinions(topicMessages, topic, apiUrl, model, language)
   );
   const opinionResults = await Promise.all(opinionPromises);
+  console.log("[Clusterer] Opinion summarization completed");
 
   // Build clusters
   const clusters: MessageCluster[] = topicsWithMessages.map(

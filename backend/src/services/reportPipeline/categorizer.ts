@@ -12,6 +12,8 @@ export async function categorizeMessages(
   model: string,
   language: ReportLanguage = "en"
 ): Promise<CategorizerResult> {
+  console.log(`[Categorizer] Starting categorization: ${messages.length} messages, language=${language}`);
+
   // Create all batch promises in parallel
   const batchPromises: Promise<CategorizedMessage[]>[] = [];
 
@@ -19,10 +21,12 @@ export async function categorizeMessages(
     const batch = messages.slice(i, i + BATCH_SIZE);
     batchPromises.push(categorizeBatch(batch, apiUrl, model, language));
   }
+  console.log(`[Categorizer] Created ${batchPromises.length} batch promises (batch size: ${BATCH_SIZE})`);
 
   // Wait for all batches to complete
   const batchResults = await Promise.all(batchPromises);
   const categorizedMessages = batchResults.flat();
+  console.log(`[Categorizer] Completed: ${categorizedMessages.length} messages categorized`);
 
   return { messages: categorizedMessages };
 }

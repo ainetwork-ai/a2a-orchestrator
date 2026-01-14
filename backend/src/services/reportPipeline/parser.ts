@@ -14,14 +14,17 @@ import {
  * Applies date filtering and sampling if message count exceeds limit
  */
 export async function parseThreads(params: ReportRequestParams): Promise<ParserResult> {
+  console.log("[Parser] Starting parseThreads with params:", JSON.stringify(params));
   const threadManager = ThreadManager.getInstance();
 
   // Get threads to analyze
   let threads = threadManager.getAllThreads();
+  console.log(`[Parser] Found ${threads.length} total threads`);
 
   // Filter by specific thread IDs if provided
   if (params.threadIds && params.threadIds.length > 0) {
     threads = threads.filter(t => params.threadIds!.includes(t.id));
+    console.log(`[Parser] Filtered to ${threads.length} threads by threadIds`);
   }
 
   // Apply default date range if not specified (last 30 days)

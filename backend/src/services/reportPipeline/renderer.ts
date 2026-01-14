@@ -98,6 +98,7 @@ export function renderMarkdown(
   options: RenderOptions = {}
 ): RendererResult {
   const lang = options.language || getLanguageFromTimezone(options.timezone);
+  console.log(`[Renderer] Starting markdown render: language=${lang}, clusters=${clusters.length}`);
   const t = i18n[lang];
   const lines: string[] = [];
 
@@ -243,6 +244,7 @@ export function renderMarkdown(
   lines.push(`4. ${t.step4}`);
   lines.push("");
 
+  console.log(`[Renderer] Completed: generated ${lines.length} lines of markdown`);
   return { markdown: lines.join("\n") };
 }
 
