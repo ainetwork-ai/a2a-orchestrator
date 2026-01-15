@@ -39,6 +39,7 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
   console.log(`[Parser] Max messages: ${maxMessages}`);
 
   const parsedMessages: ParsedMessage[] = [];
+  const threadsWithMessages = new Set<string>();
 
   for (const thread of threads) {
     const world = threadManager.getWorld(thread.id);
@@ -69,6 +70,9 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
         timestamp: msg.timestamp,
         // userId is intentionally not included for anonymization
       });
+
+      // Track threads that have at least one valid message
+      threadsWithMessages.add(thread.id);
     }
   }
 
@@ -89,11 +93,12 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
   // Re-sort by timestamp ascending for analysis
   finalMessages.sort((a, b) => a.timestamp - b.timestamp);
 
-  console.log(`[Parser] Result: ${finalMessages.length} messages from ${threads.length} threads (sampled: ${wasSampled})`);
+  const threadCount = threadsWithMessages.size;
+  console.log(`[Parser] Result: ${finalMessages.length} messages from ${threadCount} threads (${threads.length - threadCount} empty threads excluded, sampled: ${wasSampled})`);
 
   return {
     messages: finalMessages,
-    threadCount: threads.length,
+    threadCount,
     totalMessagesBeforeSampling,
     wasSampled,
   };
