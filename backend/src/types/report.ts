@@ -113,7 +113,7 @@ export interface ReportRequestParams {
 
 export const DEFAULT_MAX_MESSAGES = 1000;
 export const DEFAULT_DATE_RANGE_DAYS = 30; // Default to last 30 days if no date specified
-export const MIN_MESSAGE_LENGTH = 7; // Minimum message length to include (filters out "Hi", "ㅇㅇ", etc.)
+export const MIN_MESSAGE_LENGTH = 3; // Minimum message length to include (filters out "Hi", "ㅇㅇ", etc.)
 
 // Pipeline step results
 export interface ParserResult {
