@@ -7,6 +7,7 @@ import {
   ReportLanguage,
   ActionItem,
 } from "../../types/report";
+import { parseJsonResponse } from "../../utils/llm";
 
 /**
  * Synthesize all cluster analyses into a total summary
@@ -91,14 +92,12 @@ Respond in JSON format only:
       0.5
     );
 
-    let jsonStr = response.trim();
-    if (jsonStr.startsWith("```json")) {
-      jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-    } else if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.replace(/```\s*/g, "");
-    }
-
-    const parsed = JSON.parse(jsonStr);
+    const parsed = parseJsonResponse<{
+      overallSentiment?: "positive" | "negative" | "mixed" | "neutral";
+      keyFindings?: string[];
+      topPriorities?: { action?: string; priority?: string; rationale?: string }[];
+      executiveSummary?: string;
+    }>(response);
 
     const synthesis: ReportSynthesis = {
       overallSentiment: parsed.overallSentiment || "neutral",

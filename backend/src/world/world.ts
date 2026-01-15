@@ -5,6 +5,7 @@ import RequestManager from "./requestManager";
 import { MessageDAG } from "./messageDAG";
 import { Verifier } from "./verifier";
 import { getRedisClient } from "../utils/redis";
+import { parseJsonResponse } from "../utils/llm";
 
 // Create a custom agent that allows self-signed certificates
 const httpsAgent = new https.Agent({
@@ -161,15 +162,8 @@ Respond in JSON format only:
         0.3
       );
 
-      // Parse JSON response - remove markdown code blocks if present
-      let jsonStr = response.trim();
-      if (jsonStr.startsWith("```json")) {
-        jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-      } else if (jsonStr.startsWith("```")) {
-        jsonStr = jsonStr.replace(/```\s*/g, "");
-      }
-
-      const parsed = JSON.parse(jsonStr);
+      // Parse JSON response
+      const parsed = parseJsonResponse<{ agents?: string[]; reason?: string }>(response);
       const selectedAgentIds = parsed.agents || [];
       const reason = parsed.reason || "No reason provided";
 
@@ -261,15 +255,12 @@ Respond in JSON format only:
         0.3
       );
 
-      // Parse JSON response - remove markdown code blocks if present
-      let jsonStr = response.trim();
-      if (jsonStr.startsWith("```json")) {
-        jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-      } else if (jsonStr.startsWith("```")) {
-        jsonStr = jsonStr.replace(/```\s*/g, "");
-      }
-
-      const parsed = JSON.parse(jsonStr);
+      // Parse JSON response
+      const parsed = parseJsonResponse<{
+        summary?: string;
+        next?: { id?: string; name?: string };
+        recommendation_reason?: string;
+      }>(response);
 
       // Validate next speaker
       let validSpeaker = availableSpeakers.find(s =>
@@ -277,7 +268,7 @@ Respond in JSON format only:
       );
 
       return {
-        summary: parsed.summary || response.substring(0, 500),
+        summary: parsed.summary || "",
         next: validSpeaker || { id: "user", name: "User" },
         recommendation_reason: parsed.recommendation_reason || ""
       };

@@ -1,6 +1,7 @@
 import RequestManager from "../../world/requestManager";
 import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage, ClusterSummary, ActionItem } from "../../types/report";
 import { v4 as uuidv4 } from "uuid";
+import { parseJsonResponse } from "../../utils/llm";
 
 /**
  * Cluster messages by topic and gather opinions using LLM
@@ -81,15 +82,8 @@ Respond in JSON format only:
       0.3
     );
 
-    let jsonStr = response.trim();
-    if (jsonStr.startsWith("```json")) {
-      jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-    } else if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.replace(/```\s*/g, "");
-    }
-
-    const parsed = JSON.parse(jsonStr);
-    return parsed.topics?.map((t: any) => t.name) || [];
+    const parsed = parseJsonResponse<{ topics?: { name: string }[] }>(response);
+    return parsed.topics?.map((t) => t.name) || [];
   } catch (error) {
     console.error("[Clusterer] Error identifying topics:", error);
     // Fallback: use categories as topics
@@ -206,14 +200,7 @@ Respond in JSON format only:
       0.3
     );
 
-    let jsonStr = response.trim();
-    if (jsonStr.startsWith("```json")) {
-      jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-    } else if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.replace(/```\s*/g, "");
-    }
-
-    const parsed = JSON.parse(jsonStr);
+    const parsed = parseJsonResponse<{ assignments?: { index: number; topic: string }[] }>(response);
     const result: Record<string, CategorizedMessage[]> = {};
     topics.forEach(t => (result[t] = []));
 
@@ -322,14 +309,11 @@ Respond in JSON format only:
       0.5
     );
 
-    let jsonStr = response.trim();
-    if (jsonStr.startsWith("```json")) {
-      jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-    } else if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.replace(/```\s*/g, "");
-    }
-
-    const parsed = JSON.parse(jsonStr);
+    const parsed = parseJsonResponse<{
+      opinions?: any[];
+      summary?: { consensus?: string[]; conflicting?: string[]; sentiment?: "positive" | "negative" | "mixed" | "neutral" };
+      nextSteps?: { action?: string; priority?: string; rationale?: string }[];
+    }>(response);
 
     // Extract opinions
     const opinions = (parsed.opinions || []).map((op: any) => {

@@ -1,5 +1,6 @@
 import RequestManager from "../../world/requestManager";
 import { ParsedMessage, CategorizedMessage, CategorizerResult, ReportLanguage } from "../../types/report";
+import { parseJsonResponse } from "../../utils/llm";
 
 const BATCH_SIZE = 10; // Process messages in batches to reduce API calls
 
@@ -87,14 +88,7 @@ Respond in JSON format only:
     );
 
     // Parse JSON response
-    let jsonStr = response.trim();
-    if (jsonStr.startsWith("```json")) {
-      jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-    } else if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.replace(/```\s*/g, "");
-    }
-
-    const parsed = JSON.parse(jsonStr);
+    const parsed = parseJsonResponse<{ results?: any[] }>(response);
     const results = parsed.results || [];
 
     // Map results back to messages
