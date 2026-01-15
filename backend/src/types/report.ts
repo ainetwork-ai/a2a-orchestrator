@@ -60,12 +60,20 @@ export interface ReportStatistics {
   nonSubstantiveCount: number; // Messages filtered out (greetings, chitchat)
 }
 
+export interface ReportSynthesis {
+  overallSentiment: "positive" | "negative" | "mixed" | "neutral";
+  keyFindings: string[];           // 3-5 key takeaways
+  topPriorities: ActionItem[];     // Top 3-5 actions across all clusters
+  executiveSummary: string;        // 2-3 sentence summary for decision makers
+}
+
 export interface Report {
   id: string;
   title: string;
   createdAt: number;
   statistics: ReportStatistics;
   clusters: MessageCluster[];
+  synthesis?: ReportSynthesis;     // Total summary across all clusters
   markdown: string;
 }
 
@@ -129,4 +137,8 @@ export interface AnalyzerResult {
 
 export interface RendererResult {
   markdown: string;
+}
+
+export interface SynthesizerResult {
+  synthesis: ReportSynthesis;
 }

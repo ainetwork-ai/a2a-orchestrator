@@ -1,4 +1,4 @@
-import { ReportStatistics, MessageCluster, RendererResult, ReportLanguage } from "../../types/report";
+import { ReportStatistics, MessageCluster, RendererResult, ReportLanguage, ReportSynthesis } from "../../types/report";
 
 // Localization strings
 const i18n: Record<ReportLanguage, Record<string, string>> = {
@@ -48,6 +48,10 @@ const i18n: Record<ReportLanguage, Record<string, string>> = {
     priorityHigh: "High",
     priorityMedium: "Medium",
     priorityLow: "Low",
+    // Total synthesis keys
+    totalSummary: "Executive Insights",
+    keyFindings: "Key Findings",
+    topPriorities: "Top Priority Actions",
   },
   ko: {
     title: "사용자 대화 분석 리포트",
@@ -95,6 +99,10 @@ const i18n: Record<ReportLanguage, Record<string, string>> = {
     priorityHigh: "높음",
     priorityMedium: "중간",
     priorityLow: "낮음",
+    // Total synthesis keys
+    totalSummary: "종합 인사이트",
+    keyFindings: "핵심 발견사항",
+    topPriorities: "최우선 조치사항",
   },
 };
 
@@ -121,6 +129,7 @@ export interface RenderOptions {
 export function renderMarkdown(
   statistics: ReportStatistics,
   clusters: MessageCluster[],
+  synthesis: ReportSynthesis | undefined,
   options: RenderOptions = {}
 ): RendererResult {
   const lang = options.language || getLanguageFromTimezone(options.timezone);
@@ -176,6 +185,57 @@ export function renderMarkdown(
     lines.push(`> **${t.note}**: ${notes.join(". ")}.`);
   }
   lines.push("");
+
+  // Total Synthesis Section (if available)
+  if (synthesis) {
+    lines.push(`## ${t.totalSummary}`);
+    lines.push("");
+
+    // Executive summary paragraph
+    if (synthesis.executiveSummary) {
+      lines.push(`> ${synthesis.executiveSummary}`);
+      lines.push("");
+    }
+
+    // Overall sentiment
+    const sentimentLabelsTotal: Record<string, string> = {
+      positive: t.positive,
+      negative: t.negative,
+      neutral: t.neutral,
+      mixed: t.mixed,
+    };
+    const sentimentEmojiTotal = synthesis.overallSentiment === "positive" ? "🟢" :
+      synthesis.overallSentiment === "negative" ? "🔴" :
+      synthesis.overallSentiment === "mixed" ? "🟡" : "⚪";
+    lines.push(`${sentimentEmojiTotal} **${t.overallSentiment}**: ${sentimentLabelsTotal[synthesis.overallSentiment] || synthesis.overallSentiment}`);
+    lines.push("");
+
+    // Key findings
+    if (synthesis.keyFindings.length > 0) {
+      lines.push(`### ${t.keyFindings}`);
+      lines.push("");
+      for (const finding of synthesis.keyFindings) {
+        lines.push(`- ${finding}`);
+      }
+      lines.push("");
+    }
+
+    // Top priorities
+    if (synthesis.topPriorities.length > 0) {
+      lines.push(`### ${t.topPriorities}`);
+      lines.push("");
+      lines.push(`| ${t.priority} | ${t.action} | ${t.rationale} |`);
+      lines.push("|----------|--------|----------|");
+      for (const step of synthesis.topPriorities) {
+        const priorityEmoji = step.priority === "high" ? "🔴" :
+          step.priority === "medium" ? "🟡" : "🟢";
+        const priorityLabel = step.priority === "high" ? t.priorityHigh :
+          step.priority === "medium" ? t.priorityMedium : t.priorityLow;
+        lines.push(`| ${priorityEmoji} ${priorityLabel} | ${step.action} | ${step.rationale} |`);
+      }
+      lines.push("");
+    }
+  }
 
   // Sentiment Overview
   lines.push(`## ${t.sentimentOverview}`);

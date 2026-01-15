@@ -3,6 +3,7 @@ import { parseThreads } from "./parser";
 import { categorizeMessages } from "./categorizer";
 import { clusterMessages } from "./clusterer";
 import { analyzeData } from "./analyzer";
+import { synthesizeReport } from "./synthesizer";
 import { renderMarkdown } from "./renderer";
 import {
   Report,
@@ -17,6 +18,7 @@ const STEPS = [
   "Categorizing messages",
   "Clustering by topic",
   "Analyzing statistics",
+  "Synthesizing insights",
   "Generating report",
 ];
 
@@ -114,12 +116,25 @@ export async function generateReport(
     filteredCount
   );
 
-  // Step 5: Render markdown report
+  // Step 5: Synthesize insights across all clusters
   updateProgress(5);
   console.log(`[ReportPipeline] Step 5: ${STEPS[4]}`);
+  const synthesizerResult = await synthesizeReport(
+    clustererResult.clusters,
+    analyzerResult.statistics,
+    apiUrl,
+    model,
+    language
+  );
+  console.log(`[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`);
+
+  // Step 6: Render markdown report
+  updateProgress(6);
+  console.log(`[ReportPipeline] Step 6: ${STEPS[5]}`);
   const rendererResult = renderMarkdown(
     analyzerResult.statistics,
     clustererResult.clusters,
+    synthesizerResult.synthesis,
     { timezone: params.timezone, language: params.language }
   );
 
@@ -131,6 +146,7 @@ export async function generateReport(
     createdAt: Date.now(),
     statistics: analyzerResult.statistics,
     clusters: clustererResult.clusters,
+    synthesis: synthesizerResult.synthesis,
     markdown: rendererResult.markdown,
   };
 }
@@ -138,5 +154,6 @@ export async function generateReport(
 export { parseThreads } from "./parser";
 export { categorizeMessages } from "./categorizer";
 export { clusterMessages } from "./clusterer";
+export { synthesizeReport } from "./synthesizer";
 export { analyzeData } from "./analyzer";
 export { renderMarkdown } from "./renderer";
