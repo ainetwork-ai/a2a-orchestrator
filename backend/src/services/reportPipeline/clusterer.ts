@@ -100,8 +100,10 @@ async function assignMessagesToTopics(
   language: ReportLanguage
 ): Promise<MessageCluster[]> {
   if (topics.length === 0) {
+    console.warn("[Clusterer] No topics to assign messages to - returning empty clusters");
     return [];
   }
+  console.log(`[Clusterer] Assigning ${messages.length} messages to ${topics.length} topics: [${topics.join(", ")}]`);
 
   // Process in batches (parallel)
   const BATCH_SIZE = 20;
@@ -132,6 +134,18 @@ async function assignMessagesToTopics(
   const topicsWithMessages = Array.from(assignments.entries()).filter(
     ([, msgs]) => msgs.length > 0
   );
+
+  // Log assignment results
+  const assignmentSummary = Array.from(assignments.entries())
+    .map(([topic, msgs]) => `${topic}:${msgs.length}`)
+    .join(", ");
+  console.log(`[Clusterer] Assignment results: ${assignmentSummary}`);
+  console.log(`[Clusterer] Topics with messages: ${topicsWithMessages.length} / ${topics.length}`);
+
+  if (topicsWithMessages.length === 0) {
+    console.warn("[Clusterer] No topics have any assigned messages - returning empty clusters");
+    return [];
+  }
 
   // Analyze clusters in parallel (opinions + summary + next steps)
   console.log(`[Clusterer] Analyzing ${topicsWithMessages.length} clusters...`);
@@ -171,7 +185,7 @@ async function assignBatchToTopics(
     content: m.content,
   }));
 
-  const prompt = `Assign each message to the most relevant topic.
+  const prompt = `Assign each message to the most relevant topic by topic number.
 
 Topics:
 ${topics.map((t, i) => `${i + 1}. ${t}`).join("\n")}
@@ -180,13 +194,13 @@ Messages:
 ${JSON.stringify(messagesForPrompt, null, 2)}
 
 Instructions:
-- Assign each message to exactly one topic
+- Assign each message to exactly one topic using the topic NUMBER (1, 2, 3, etc.)
 - If a message doesn't fit any topic well, assign it to the closest match
 
 Respond in JSON format only:
 {
   "assignments": [
-    { "index": 0, "topic": "Topic name" }
+    { "index": 0, "topic_number": 1 }
   ]
 }`;
 
@@ -200,17 +214,23 @@ Respond in JSON format only:
       0.3
     );
 
-    const parsed = parseJsonResponse<{ assignments?: { index: number; topic: string }[] }>(response);
+    const parsed = parseJsonResponse<{ assignments?: { index: number; topic_number: number; topic?: string }[] }>(response);
     const result: Record<string, CategorizedMessage[]> = {};
     topics.forEach(t => (result[t] = []));
 
+    let matchedCount = 0;
     for (const assignment of parsed.assignments || []) {
       const msg = messages[assignment.index];
-      const topic = assignment.topic;
-      if (msg && result[topic]) {
+      // Use topic_number (1-indexed) to get the actual topic name
+      const topicIndex = (assignment.topic_number ?? 0) - 1;
+      const topic = topics[topicIndex] || assignment.topic; // Fallback to topic name if provided
+
+      if (msg && topic && result[topic] !== undefined) {
         result[topic].push(msg);
+        matchedCount++;
       }
     }
+    console.log(`[Clusterer] Batch assignment: ${matchedCount}/${messages.length} messages matched`);
 
     return result;
   } catch (error) {

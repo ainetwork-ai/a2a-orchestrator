@@ -27,7 +27,16 @@ export async function categorizeMessages(
   // Wait for all batches to complete
   const batchResults = await Promise.all(batchPromises);
   const categorizedMessages = batchResults.flat();
+
+  // Log categorization summary
+  const substantiveCount = categorizedMessages.filter(m => m.isSubstantive).length;
+  const categoryBreakdown = categorizedMessages.reduce((acc, m) => {
+    acc[m.category] = (acc[m.category] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
   console.log(`[Categorizer] Completed: ${categorizedMessages.length} messages categorized`);
+  console.log(`[Categorizer] Substantive: ${substantiveCount}, Non-substantive: ${categorizedMessages.length - substantiveCount}`);
+  console.log(`[Categorizer] Categories: ${JSON.stringify(categoryBreakdown)}`);
 
   return { messages: categorizedMessages };
 }

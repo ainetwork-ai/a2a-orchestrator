@@ -80,6 +80,7 @@ export async function generateReport(
   // Step 2: Categorize messages using LLM
   updateProgress(2);
   console.log(`[ReportPipeline] Step 2: ${STEPS[1]}`);
+  console.log(`[ReportPipeline] Input to categorizer: ${parserResult.messages.length} messages`);
   const categorizerResult = await categorizeMessages(
     parserResult.messages,
     apiUrl,
@@ -91,11 +92,15 @@ export async function generateReport(
   // Filter out non-substantive messages for clustering
   const substantiveMessages = categorizerResult.messages.filter(m => m.isSubstantive);
   const filteredCount = categorizerResult.messages.length - substantiveMessages.length;
-  console.log(`[ReportPipeline] Filtered ${filteredCount} non-substantive messages (greetings/chitchat)`);
+  console.log(`[ReportPipeline] Substantive: ${substantiveMessages.length}, Non-substantive: ${filteredCount}`);
+  if (substantiveMessages.length > 0) {
+    console.log(`[ReportPipeline] Sample substantive message: "${substantiveMessages[0].content.substring(0, 50)}..."`);
+  }
 
   // Step 3: Cluster messages by topic (only substantive messages)
   updateProgress(3);
   console.log(`[ReportPipeline] Step 3: ${STEPS[2]}`);
+  console.log(`[ReportPipeline] Input to clusterer: ${substantiveMessages.length} substantive messages`);
   const clustererResult = await clusterMessages(
     substantiveMessages,
     apiUrl,
@@ -103,6 +108,12 @@ export async function generateReport(
     language
   );
   console.log(`[ReportPipeline] Created ${clustererResult.clusters.length} clusters`);
+  if (clustererResult.clusters.length > 0) {
+    const clusterSummary = clustererResult.clusters.map(c => `${c.topic}(${c.messages.length})`).join(", ");
+    console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
+  } else {
+    console.warn(`[ReportPipeline] WARNING: No clusters created from ${substantiveMessages.length} messages`);
+  }
 
   // Step 4: Analyze data and generate statistics
   updateProgress(4);
