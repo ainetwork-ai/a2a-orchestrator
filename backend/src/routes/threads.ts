@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import ThreadManager from "../world/threadManager";
 import { AgentPersona } from "../types";
+import AgentService from "../services/agentService";
 
 const router = Router();
 
@@ -42,6 +43,15 @@ router.post("/", (req: Request, res: Response) => {
 
     const threadManager = ThreadManager.getInstance();
     const thread = threadManager.createThread(name, userId, agents || []);
+
+    // Register agents to Redis Set for report filtering
+    if (agents && agents.length > 0) {
+      const agentService = AgentService.getInstance();
+      const registeredAgents = agents
+        .filter((a: AgentPersona) => a.name && a.a2aUrl)
+        .map((a: AgentPersona) => ({ name: a.name, a2aUrl: a.a2aUrl }));
+      agentService.registerAgents(registeredAgents);
+    }
 
     res.json({
       success: true,
@@ -173,6 +183,10 @@ router.post("/:threadId/agents", (req: Request, res: Response) => {
         error: "Failed to add agent (thread not found or agent already exists)"
       });
     }
+
+    // Register agent to Redis Set for report filtering
+    const agentService = AgentService.getInstance();
+    agentService.registerAgent({ name: agent.name, a2aUrl: agent.a2aUrl });
 
     const thread = threadManager.getThread(threadId);
     res.json({

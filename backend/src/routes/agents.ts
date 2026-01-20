@@ -1,8 +1,35 @@
 import { Router, Request, Response } from "express";
 // @ts-ignore - ESM import in CommonJS environment
 import { A2AClient } from "@a2a-js/sdk/client";
+import AgentService from "../services/agentService";
 
 const router = Router();
+
+/**
+ * GET /api/agents
+ * Get all registered agents for report filtering
+ *
+ * Response:
+ * - agents: Array of { name, a2aUrl }
+ */
+router.get("/", async (req: Request, res: Response) => {
+  try {
+    const agentService = AgentService.getInstance();
+    const agents = await agentService.getAllAgents();
+
+    res.json({
+      success: true,
+      agents,
+      total: agents.length,
+    });
+  } catch (error: any) {
+    console.error("Error getting agents:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error",
+    });
+  }
+});
 
 // Import agent information from A2A URL
 router.post("/import", async (req: Request, res: Response) => {

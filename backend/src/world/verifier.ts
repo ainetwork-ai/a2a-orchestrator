@@ -1,4 +1,5 @@
 import RequestManager from "./requestManager";
+import { parseJsonResponse } from "../utils/llm";
 
 export interface VerificationResult {
   should_stop: boolean;
@@ -107,14 +108,11 @@ If should_stop is false, set stop_reason to an empty string.`;
       );
 
       // Parse JSON response
-      let jsonStr = response.trim();
-      if (jsonStr.startsWith("```json")) {
-        jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-      } else if (jsonStr.startsWith("```")) {
-        jsonStr = jsonStr.replace(/```\s*/g, "");
-      }
-
-      const parsed = JSON.parse(jsonStr);
+      const parsed = parseJsonResponse<{
+        user_intent?: string;
+        should_stop?: boolean;
+        stop_reason?: string;
+      }>(response);
 
       // Update user intent if this is the first time or if it changed
       if (parsed.user_intent && !this.userIntent) {
