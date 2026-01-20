@@ -89,6 +89,33 @@ class ReportService {
   }
 
   /**
+   * Get all jobs (from Redis)
+   */
+  async getAllJobs(): Promise<ReportJob[]> {
+    try {
+      const redis = getRedisClient();
+      const keys = await redis.keys(`${JOB_PREFIX}*`);
+
+      if (keys.length === 0) return [];
+
+      const jobs: ReportJob[] = [];
+      for (const key of keys) {
+        const data = await redis.get(key);
+        if (data) {
+          jobs.push(JSON.parse(data) as ReportJob);
+        }
+      }
+
+      // Sort by createdAt descending (newest first)
+      jobs.sort((a, b) => b.createdAt - a.createdAt);
+      return jobs;
+    } catch (error) {
+      console.error("[ReportService] Error getting all jobs:", error);
+      return [];
+    }
+  }
+
+  /**
    * Process job in background
    */
   private async processJob(jobId: string): Promise<void> {

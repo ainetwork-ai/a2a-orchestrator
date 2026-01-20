@@ -5,6 +5,43 @@ import { ReportRequestParams } from "../types/report";
 const router = Router();
 
 /**
+ * GET /api/reports
+ * Get all report jobs
+ *
+ * Response:
+ * - jobs: Array of { jobId, status, createdAt, updatedAt }
+ */
+router.get("/", async (req: Request, res: Response) => {
+  try {
+    const reportService = ReportService.getInstance();
+    const jobs = await reportService.getAllJobs();
+
+    // Return simplified job info (without full report data)
+    const jobList = jobs.map((job) => ({
+      jobId: job.id,
+      status: job.status,
+      progress: job.progress,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      cachedAt: job.cachedAt,
+      error: job.error,
+    }));
+
+    res.json({
+      success: true,
+      jobs: jobList,
+      total: jobList.length,
+    });
+  } catch (error: any) {
+    console.error("Error getting all report jobs:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error",
+    });
+  }
+});
+
+/**
  * POST /api/reports
  * Create a new report generation job
  *
