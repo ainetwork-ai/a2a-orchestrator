@@ -170,8 +170,8 @@ class ReportService {
       params.threadIds?.sort().join(",") || "all",
       params.agentUrls?.sort().join(",") || "all",
       params.agentNames?.sort().join(",") || "all",
-      params.startDate?.toString() || "0",
-      params.endDate?.toString() || "0",
+      params.startDate || "0",
+      params.endDate || "0",
     ];
     return parts.join(":");
   }
