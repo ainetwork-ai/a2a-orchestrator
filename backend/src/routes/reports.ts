@@ -59,6 +59,29 @@ router.post("/", async (req: Request, res: Response) => {
   try {
     const { threadIds, agentUrls, agentNames, startDate, endDate, timezone, language } = req.body;
 
+    // Validation
+    if (threadIds !== undefined && !Array.isArray(threadIds)) {
+      return res.status(400).json({ success: false, error: "threadIds must be an array" });
+    }
+    if (agentUrls !== undefined && !Array.isArray(agentUrls)) {
+      return res.status(400).json({ success: false, error: "agentUrls must be an array" });
+    }
+    if (agentNames !== undefined && !Array.isArray(agentNames)) {
+      return res.status(400).json({ success: false, error: "agentNames must be an array" });
+    }
+    if (startDate !== undefined && (typeof startDate !== "string" || isNaN(Date.parse(startDate)))) {
+      return res.status(400).json({ success: false, error: "startDate must be a valid ISO date string" });
+    }
+    if (endDate !== undefined && (typeof endDate !== "string" || isNaN(Date.parse(endDate)))) {
+      return res.status(400).json({ success: false, error: "endDate must be a valid ISO date string" });
+    }
+    if (timezone !== undefined && typeof timezone !== "string") {
+      return res.status(400).json({ success: false, error: "timezone must be a string" });
+    }
+    if (language !== undefined && !["ko", "en"].includes(language)) {
+      return res.status(400).json({ success: false, error: "language must be 'ko' or 'en'" });
+    }
+
     const params: ReportRequestParams = {
       threadIds: threadIds || undefined,
       agentUrls: agentUrls || undefined,
