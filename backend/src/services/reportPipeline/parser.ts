@@ -96,13 +96,10 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
     }
   }
 
-  // Sort by timestamp (newest first for sampling priority)
-  parsedMessages.sort((a, b) => b.timestamp - a.timestamp);
-
   const totalMessagesBeforeSampling = parsedMessages.length;
   let wasSampled = false;
 
-  // Sample if exceeds max messages
+  // Sample if exceeds max messages, then sort once
   let finalMessages = parsedMessages;
   if (parsedMessages.length > maxMessages) {
     console.log(`[Parser] Sampling ${maxMessages} from ${parsedMessages.length} messages`);
@@ -110,7 +107,7 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
     wasSampled = true;
   }
 
-  // Re-sort by timestamp ascending for analysis
+  // Sort by timestamp ascending for analysis (single sort)
   finalMessages.sort((a, b) => a.timestamp - b.timestamp);
 
   const threadCount = threadsWithMessages.size;
@@ -141,9 +138,9 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
 }
 
 /**
- * Sample messages with stratified approach
- * - Takes recent messages with higher priority
- * - Ensures temporal distribution
+ * Sample messages with stratified approach (without pre-sorting)
+ * - Takes recent messages with higher priority (70%)
+ * - Random sample from older messages (30%)
  */
 function sampleMessages(messages: ParsedMessage[], maxCount: number): ParsedMessage[] {
   if (messages.length <= maxCount) return messages;
@@ -152,15 +149,30 @@ function sampleMessages(messages: ParsedMessage[], maxCount: number): ParsedMess
   const recentCount = Math.floor(maxCount * 0.7);
   const randomCount = maxCount - recentCount;
 
-  // Messages are already sorted newest first
-  const recentMessages = messages.slice(0, recentCount);
-  const olderMessages = messages.slice(recentCount);
+  // Find the timestamp threshold for "recent" messages using partial sort (quickselect-like)
+  // Sort by timestamp descending, take indices of top recentCount
+  const indexed = messages.map((m, i) => ({ idx: i, ts: m.timestamp }));
+  indexed.sort((a, b) => b.ts - a.ts); // Sort indices by timestamp desc
+
+  const recentIndices = new Set(indexed.slice(0, recentCount).map(x => x.idx));
+  const olderIndices = indexed.slice(recentCount).map(x => x.idx);
 
   // Random sample from older messages
-  const shuffledOlder = olderMessages.sort(() => Math.random() - 0.5);
-  const sampledOlder = shuffledOlder.slice(0, randomCount);
+  for (let i = olderIndices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [olderIndices[i], olderIndices[j]] = [olderIndices[j], olderIndices[i]];
+  }
+  const sampledOlderIndices = new Set(olderIndices.slice(0, randomCount));
 
-  return [...recentMessages, ...sampledOlder];
+  // Collect sampled messages (preserves original order for final sort)
+  const result: ParsedMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (recentIndices.has(i) || sampledOlderIndices.has(i)) {
+      result.push(messages[i]);
+    }
+  }
+
+  return result;
 }
 
 /**
