@@ -1,8 +1,6 @@
 import RequestManager from "../../world/requestManager";
-import { ParsedMessage, CategorizedMessage, CategorizerResult, ReportLanguage } from "../../types/report";
+import { ParsedMessage, CategorizedMessage, CategorizerResult, ReportLanguage, CATEGORIZER_BATCH_SIZE } from "../../types/report";
 import { parseJsonResponse } from "../../utils/llm";
-
-const BATCH_SIZE = 10; // Process messages in batches to reduce API calls
 
 /**
  * Categorize messages using LLM
@@ -18,11 +16,11 @@ export async function categorizeMessages(
   // Create all batch promises in parallel
   const batchPromises: Promise<CategorizedMessage[]>[] = [];
 
-  for (let i = 0; i < messages.length; i += BATCH_SIZE) {
-    const batch = messages.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < messages.length; i += CATEGORIZER_BATCH_SIZE) {
+    const batch = messages.slice(i, i + CATEGORIZER_BATCH_SIZE);
     batchPromises.push(categorizeBatch(batch, apiUrl, model, language));
   }
-  console.log(`[Categorizer] Created ${batchPromises.length} batch promises (batch size: ${BATCH_SIZE})`);
+  console.log(`[Categorizer] Created ${batchPromises.length} batch promises (batch size: ${CATEGORIZER_BATCH_SIZE})`);
 
   // Wait for all batches to complete
   const batchResults = await Promise.all(batchPromises);

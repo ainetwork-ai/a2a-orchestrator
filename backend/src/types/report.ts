@@ -113,9 +113,21 @@ export interface ReportRequestParams {
   language?: ReportLanguage; // Report language (defaults based on timezone if not specified)
 }
 
+// Report pipeline constants
 export const DEFAULT_MAX_MESSAGES = 1000;
 export const DEFAULT_DATE_RANGE_DAYS = 30; // Default to last 30 days if no date specified
 export const MIN_MESSAGE_LENGTH = 3; // Minimum message length to include (filters out "Hi", "ㅇㅇ", etc.)
+
+// Batch sizes for LLM processing
+export const CATEGORIZER_BATCH_SIZE = 10; // Messages per batch in categorizer
+export const CLUSTERER_BATCH_SIZE = 20; // Messages per batch in clusterer
+
+// Sampling limits
+export const SAMPLE_SIZE_FOR_TOPICS = 50; // Max messages to sample when identifying topics
+export const MAX_SAMPLE_MESSAGES_PER_CLUSTER = 30; // Max messages to sample when analyzing each cluster
+
+// Cache
+export const REPORT_CACHE_TTL_SECONDS = 3600; // 1 hour cache
 
 // Pipeline step results
 export interface ParserResult {

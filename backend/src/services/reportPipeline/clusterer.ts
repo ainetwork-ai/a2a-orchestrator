@@ -1,5 +1,5 @@
 import RequestManager from "../../world/requestManager";
-import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage, ClusterSummary, ActionItem } from "../../types/report";
+import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage, ClusterSummary, ActionItem, CLUSTERER_BATCH_SIZE, SAMPLE_SIZE_FOR_TOPICS, MAX_SAMPLE_MESSAGES_PER_CLUSTER } from "../../types/report";
 import { v4 as uuidv4 } from "uuid";
 import { parseJsonResponse } from "../../utils/llm";
 
@@ -39,7 +39,7 @@ async function identifyTopics(
   language: ReportLanguage
 ): Promise<string[]> {
   // Sample messages if too many (to reduce token usage)
-  const sampleSize = Math.min(messages.length, 50);
+  const sampleSize = Math.min(messages.length, SAMPLE_SIZE_FOR_TOPICS);
   const sampledMessages = messages
     .sort(() => Math.random() - 0.5)
     .slice(0, sampleSize);
@@ -106,14 +106,13 @@ async function assignMessagesToTopics(
   console.log(`[Clusterer] Assigning ${messages.length} messages to ${topics.length} topics: [${topics.join(", ")}]`);
 
   // Process in batches (parallel)
-  const BATCH_SIZE = 20;
   const assignments: Map<string, CategorizedMessage[]> = new Map();
   topics.forEach(topic => assignments.set(topic, []));
 
   // Create all batch promises in parallel
   const batchPromises: Promise<Record<string, CategorizedMessage[]>>[] = [];
-  for (let i = 0; i < messages.length; i += BATCH_SIZE) {
-    const batch = messages.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < messages.length; i += CLUSTERER_BATCH_SIZE) {
+    const batch = messages.slice(i, i + CLUSTERER_BATCH_SIZE);
     batchPromises.push(assignBatchToTopics(batch, topics, apiUrl, model));
   }
   console.log(`[Clusterer] Created ${batchPromises.length} assignment batch promises`);
@@ -272,7 +271,7 @@ async function analyzeCluster(
   if (messages.length === 0) return defaultResult;
 
   // Sample if too many messages
-  const sampleSize = Math.min(messages.length, 30);
+  const sampleSize = Math.min(messages.length, MAX_SAMPLE_MESSAGES_PER_CLUSTER);
   const sampledMessages = messages
     .sort(() => Math.random() - 0.5)
     .slice(0, sampleSize);

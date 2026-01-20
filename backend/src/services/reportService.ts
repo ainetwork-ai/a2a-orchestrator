@@ -7,9 +7,9 @@ import {
   ReportJobStatus,
   ReportRequestParams,
   ReportJobProgress,
+  REPORT_CACHE_TTL_SECONDS,
 } from "../types/report";
 
-const CACHE_TTL_SECONDS = 3600; // 1 hour cache
 const JOB_PREFIX = "report:job:";
 const CACHE_PREFIX = "report:cache:";
 
@@ -186,7 +186,7 @@ class ReportService {
       if (data) {
         const job = JSON.parse(data) as ReportJob;
         // Check if cache is still valid
-        if (job.cachedAt && Date.now() - job.cachedAt < CACHE_TTL_SECONDS * 1000) {
+        if (job.cachedAt && Date.now() - job.cachedAt < REPORT_CACHE_TTL_SECONDS * 1000) {
           return job;
         }
       }
@@ -205,7 +205,7 @@ class ReportService {
       const redis = getRedisClient();
       await redis.setEx(
         `${CACHE_PREFIX}${cacheKey}`,
-        CACHE_TTL_SECONDS,
+        REPORT_CACHE_TTL_SECONDS,
         JSON.stringify(job)
       );
     } catch (error) {
