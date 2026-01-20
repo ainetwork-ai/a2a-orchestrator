@@ -104,6 +104,8 @@ export type ReportLanguage = "ko" | "en";
 
 export interface ReportRequestParams {
   threadIds?: string[]; // Specific threads to analyze, or all if empty
+  agentUrls?: string[]; // Filter by agent URLs (threads that include any of these agents)
+  agentNames?: string[]; // Filter by agent names (threads that include any of these agents)
   startDate?: string; // ISO date string
   endDate?: string; // ISO date string
   maxMessages?: number; // Max messages to analyze (default: 1000, will sample if exceeded)

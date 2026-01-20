@@ -27,6 +27,22 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
     console.log(`[Parser] Filtered to ${threads.length} threads by threadIds`);
   }
 
+  // Filter by agent URLs if provided (threads that include any of these agents)
+  if (params.agentUrls && params.agentUrls.length > 0) {
+    threads = threads.filter(t =>
+      t.agents.some(agent => params.agentUrls!.includes(agent.a2aUrl))
+    );
+    console.log(`[Parser] Filtered to ${threads.length} threads by agentUrls`);
+  }
+
+  // Filter by agent names if provided (threads that include any of these agents)
+  if (params.agentNames && params.agentNames.length > 0) {
+    threads = threads.filter(t =>
+      t.agents.some(agent => params.agentNames!.includes(agent.name))
+    );
+    console.log(`[Parser] Filtered to ${threads.length} threads by agentNames`);
+  }
+
   // Apply default date range if not specified (last 30 days)
   const now = Date.now();
   const endDate = params.endDate ? new Date(params.endDate).getTime() : now;

@@ -168,6 +168,8 @@ class ReportService {
   private generateCacheKey(params: ReportRequestParams): string {
     const parts = [
       params.threadIds?.sort().join(",") || "all",
+      params.agentUrls?.sort().join(",") || "all",
+      params.agentNames?.sort().join(",") || "all",
       params.startDate?.toString() || "0",
       params.endDate?.toString() || "0",
     ];

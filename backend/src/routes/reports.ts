@@ -57,10 +57,12 @@ router.get("/", async (req: Request, res: Response) => {
  */
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { threadIds, startDate, endDate, timezone, language } = req.body;
+    const { threadIds, agentUrls, agentNames, startDate, endDate, timezone, language } = req.body;
 
     const params: ReportRequestParams = {
       threadIds: threadIds || undefined,
+      agentUrls: agentUrls || undefined,
+      agentNames: agentNames || undefined,
       startDate,
       endDate,
       timezone,
