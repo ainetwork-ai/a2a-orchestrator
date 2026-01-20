@@ -143,7 +143,12 @@ async function assignMessagesToTopics(
   console.log(`[Clusterer] Topics with messages: ${topicsWithMessages.length} / ${topics.length}`);
 
   if (topicsWithMessages.length === 0) {
-    console.warn("[Clusterer] No topics have any assigned messages - returning empty clusters");
+    console.warn("[Clusterer] No topics have any assigned messages");
+    console.log("[Clusterer] Debug info:", {
+      totalMessages: messages.length,
+      totalTopics: topics.length,
+      batchResults: batchResults.map(br => Object.keys(br).length)
+    });
     return [];
   }
 
