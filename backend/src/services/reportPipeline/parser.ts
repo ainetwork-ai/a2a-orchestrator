@@ -1,4 +1,5 @@
 import ThreadManager from "../../world/threadManager";
+import AgentService from "../agentService";
 import { Message } from "../../types";
 import {
   ParsedMessage,
@@ -8,6 +9,9 @@ import {
   DEFAULT_DATE_RANGE_DAYS,
   MIN_MESSAGE_LENGTH,
 } from "../../types/report";
+
+// Flag to ensure agent registration only runs once (for migrating existing data)
+let agentsMigrated = false;
 
 /**
  * Parse threads and extract user messages with anonymization
@@ -111,6 +115,22 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
 
   const threadCount = threadsWithMessages.size;
   console.log(`[Parser] Result: ${finalMessages.length} messages from ${threadCount} threads (${threads.length - threadCount} empty threads excluded, sampled: ${wasSampled})`);
+
+  // Register agents from threads with messages to Redis Set (one-time migration for existing data)
+  if (!agentsMigrated && threadsWithMessages.size > 0) {
+    agentsMigrated = true;
+    const agentsToRegister = threads
+      .filter(t => threadsWithMessages.has(t.id))
+      .flatMap(t => t.agents)
+      .filter(a => a.name && a.a2aUrl)
+      .map(a => ({ name: a.name, a2aUrl: a.a2aUrl }));
+
+    if (agentsToRegister.length > 0) {
+      const agentService = AgentService.getInstance();
+      agentService.registerAgents(agentsToRegister);
+      console.log(`[Parser] Migrated ${agentsToRegister.length} agents to Redis Set (one-time)`);
+    }
+  }
 
   return {
     messages: finalMessages,
