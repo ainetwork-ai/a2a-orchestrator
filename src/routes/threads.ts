@@ -69,6 +69,13 @@ router.post("/", (req: Request, res: Response) => {
 router.get("/:threadId", async (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
+
+    if (!threadId || typeof threadId !== 'string') {
+      return res.status(400).json({
+        error: "Valid threadId is required"
+      });
+    }
+
     const threadManager = ThreadManager.getInstance();
     const thread = threadManager.getThread(threadId);
     
@@ -104,6 +111,13 @@ router.get("/:threadId", async (req: Request, res: Response) => {
 router.delete("/:threadId", async (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
+
+    if (!threadId || typeof threadId !== 'string') {
+      return res.status(400).json({
+        error: "Valid threadId is required"
+      });
+    }
+
     const threadManager = ThreadManager.getInstance();
     const deleted = await threadManager.deleteThread(threadId);
 
@@ -129,6 +143,12 @@ router.patch("/:threadId", (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
     const { name } = req.body;
+
+    if (!threadId || typeof threadId !== 'string') {
+      return res.status(400).json({
+        error: "Valid threadId is required"
+      });
+    }
 
     if (!name) {
       return res.status(400).json({
@@ -163,6 +183,12 @@ router.post("/:threadId/agents", (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
     const agent: AgentPersona = req.body;
+
+    if (!threadId || typeof threadId !== 'string') {
+      return res.status(400).json({
+        error: "Valid threadId is required"
+      });
+    }
 
     if (!agent.name || !agent.role || !agent.a2aUrl) {
       return res.status(400).json({
@@ -205,6 +231,19 @@ router.post("/:threadId/agents", (req: Request, res: Response) => {
 router.delete("/:threadId/agents/:agentId", (req: Request, res: Response) => {
   try {
     const { threadId, agentId } = req.params;
+
+    if (!threadId || typeof threadId !== 'string') {
+      return res.status(400).json({
+        error: "Valid threadId is required"
+      });
+    }
+
+    if (!agentId || typeof agentId !== 'string') {
+      return res.status(400).json({
+        error: "Valid agentId is required"
+      });
+    }
+
     const threadManager = ThreadManager.getInstance();
     const removed = threadManager.removeAgent(threadId, agentId);
 
@@ -232,6 +271,12 @@ router.get("/:threadId/messages", (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
     const { limit, offset, order } = req.query;
+
+    if (!threadId || typeof threadId !== 'string') {
+      return res.status(400).json({
+        error: "Valid threadId is required"
+      });
+    }
 
     const threadManager = ThreadManager.getInstance();
     const world = threadManager.getWorld(threadId);
@@ -283,6 +328,12 @@ router.post("/:threadId/messages", async (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
     const { message, action } = req.body;
+
+    if (!threadId || typeof threadId !== 'string') {
+      return res.status(400).json({
+        error: "Valid threadId is required"
+      });
+    }
 
     const threadManager = ThreadManager.getInstance();
     const world = threadManager.getWorld(threadId);
@@ -352,6 +403,12 @@ router.get("/:threadId/stream", (req: Request, res: Response) => {
   res.setHeader("X-Accel-Buffering", "no");
 
   const { threadId } = req.params;
+
+  if (!threadId || typeof threadId !== 'string') {
+    res.write(`data: ${JSON.stringify({ error: "Valid threadId is required" })}\n\n`);
+    res.end();
+    return;
+  }
 
   try {
     const threadManager = ThreadManager.getInstance();
