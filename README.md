@@ -15,29 +15,16 @@ A multi-agent orchestration system using A2A (Agent-to-Agent) protocol. This is 
 
 ## Quick Start
 
-### Local Development
+### Docker Development (Recommended)
 
-```bash
-# Install dependencies
-npm install
-
-# Copy environment file
-cp .env.example .env
-
-# Edit .env with your settings
-# Required: LLM_API_URL, LLM_MODEL, REDIS_URL
-
-# Run development server
-npm run dev
-```
-
-The server will run on `http://localhost:3001`
-
-### Docker Development (with Redis)
+Includes Redis container for full functionality.
 
 ```bash
 # Copy and configure environment file
-cp .env.example .env.dev
+cp .env.dev.example .env.dev
+
+# Edit .env.dev with your LLM API settings
+# Required: LLM_API_URL, LLM_MODEL
 
 # Start development environment (includes Redis)
 make dev
@@ -55,7 +42,10 @@ The server will run on `http://localhost:3006`
 
 ```bash
 # Copy and configure environment file
-cp .env.example .env.prod
+cp .env.prod.example .env.prod
+
+# Edit .env.prod with your production settings
+# Required: LLM_API_URL, LLM_MODEL, REDIS_URL
 
 # Start production environment
 make prod
@@ -69,28 +59,76 @@ make prod-down
 
 The server will run on `http://localhost:3002`
 
+### Local Development (without Docker)
+
+Requires Redis running on your local machine.
+
+```bash
+# Install dependencies
+npm install
+
+# Copy environment file and update Redis URL to redis://redis:6379
+cp .env.dev.example .env.dev
+
+# Edit .env.dev:
+# - Set REDIS_URL=redis://127.0.0.1:6379 (for local Redis)
+# - Configure LLM_API_URL and LLM_MODEL
+
+# Make sure Redis is running locally
+# redis-server
+
+# Run development server
+npm run dev
+```
+
+The server will run on `http://localhost:3001`
+
 ## Environment Variables
+
+### Development (.env.dev)
 
 ```env
 # Server Configuration
 NODE_ENV=development
 PORT=3001
 
-# Redis Configuration
-REDIS_URL=redis://127.0.0.1:6379
+# Redis Configuration (Docker network)
+REDIS_URL=redis://redis:6379
 
 # LLM API URL (vLLM chat completions endpoint)
 LLM_API_URL=http://your-llm-server:8000/v1/chat/completions
 
 # LLM Model path
-# Example: /data/models/gpt-oss-120b
 LLM_MODEL=/path/to/your/model
 
-# SSL Configuration (set to 0 for development)
+# SSL Configuration (allow self-signed certificates)
 NODE_TLS_REJECT_UNAUTHORIZED=0
 
 # CORS Configuration
-ALLOWED_ORIGINS=http://localhost:3000
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
+```
+
+### Production (.env.prod)
+
+```env
+# Server Configuration
+NODE_ENV=production
+PORT=3001
+
+# Redis Configuration (External via host)
+REDIS_URL=redis://host.docker.internal:6379
+
+# LLM API URL (Production server)
+LLM_API_URL=https://your-production-llm-server:8000/v1/chat/completions
+
+# LLM Model path
+LLM_MODEL=/path/to/your/model
+
+# SSL Configuration (commented out for production security)
+# NODE_TLS_REJECT_UNAUTHORIZED=0
+
+# CORS Configuration (Production frontend)
+ALLOWED_ORIGINS=https://your-frontend-domain.com
 ```
 
 ## Project Structure
