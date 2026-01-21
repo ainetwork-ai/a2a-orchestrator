@@ -2,6 +2,9 @@ version: '3.8'
 
 services:
   backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: a2a-orchestrator-backend-prod
     ports:
       - "3002:3001"
@@ -9,3 +12,10 @@ services:
       - .env.prod
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

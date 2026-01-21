@@ -1,4 +1,4 @@
-# Frontend Dockerfile for Next.js
+# Backend Dockerfile
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -12,7 +12,7 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Build Next.js app
+# Build TypeScript
 RUN npm run build
 
 # Production stage
@@ -27,15 +27,14 @@ COPY package*.json ./
 RUN npm ci --only=production
 
 # Copy built files from builder
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+COPY --from=builder /app/dist ./dist
 
 # Expose port
-EXPOSE 3000
+EXPOSE 3001
 
 # Set environment variables
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=3001
 
 # Start the application
 CMD ["npm", "start"]

@@ -1,11 +1,11 @@
 node_modules
-.next
+dist
 npm-debug.log
 .git
 .gitignore
 .env
-.env.local
-.env*.local
+.env.*
+!.env.example
 *.md
 README.md
 .DS_Store
@@ -14,4 +14,3 @@ README.md
 coverage
 .nyc_output
 *.log
-backend
