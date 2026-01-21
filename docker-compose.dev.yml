@@ -4,8 +4,6 @@ services:
   redis:
     image: redis:8-alpine
     container_name: a2a-orchestrator-redis-dev
-    env_file:
-      - .env.dev
     ports:
       - "6378:6379"
     volumes:
@@ -16,8 +14,13 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - app-network
 
   backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: a2a-orchestrator-backend-dev
     ports:
       - "3006:3001"
@@ -26,7 +29,14 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
 
 volumes:
   redis-data:
     name: a2a-orchestrator-redis-data
+
+networks:
+  app-network:
+    driver: bridge

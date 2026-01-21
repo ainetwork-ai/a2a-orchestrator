@@ -126,6 +126,13 @@ router.get("/:jobId", async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
 
+    if (!jobId || typeof jobId !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: "Valid jobId is required"
+      });
+    }
+
     const reportService = ReportService.getInstance();
     const job = await reportService.getJob(jobId);
 
@@ -165,6 +172,13 @@ router.get("/:jobId", async (req: Request, res: Response) => {
 router.get("/:jobId/markdown", async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
+
+    if (!jobId || typeof jobId !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: "Valid jobId is required"
+      });
+    }
 
     const reportService = ReportService.getInstance();
     const job = await reportService.getJob(jobId);
