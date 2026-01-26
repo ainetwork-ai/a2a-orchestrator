@@ -1,8 +1,33 @@
 import { Router, Request, Response } from "express";
 import ReportService from "../services/reportService";
-import { ReportRequestParams } from "../types/report";
+import { ReportRequestParams, VisualizationData } from "../types/report";
+import {
+  transformToT3CFormat,
+  extractTopicsSummary,
+  extractStatistics,
+} from "../utils/reportTransformer";
 
 const router = Router();
+
+/**
+ * Create default visualization data for fallback
+ */
+function createDefaultVisualization(): VisualizationData {
+  return {
+    scatterPlot: {
+      points: [],
+      axes: {
+        x: { label: "Sentiment", min: -1, max: 1 },
+        y: { label: "Priority", min: 0, max: 1 },
+      },
+    },
+    topicTree: {
+      nodes: [],
+      links: [],
+    },
+    charts: {},
+  };
+}
 
 /**
  * GET /api/reports
@@ -116,20 +141,34 @@ router.post("/", async (req: Request, res: Response) => {
  * GET /api/reports/:jobId
  * Get report job status and result
  *
+ * Query Parameters:
+ * - format: "json" (default) | "markdown" | "full"
+ * - includeMessages: "true" (default) | "false"
+ *
  * Response:
  * - status: "pending" | "processing" | "completed" | "failed"
  * - progress?: { step, totalSteps, currentStep, percentage }
- * - report?: Report - Available when status is "completed"
+ * - report?: T3CReport | { markdown: string } - Available when status is "completed"
  * - error?: string - Available when status is "failed"
  */
 router.get("/:jobId", async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
+    const format = (req.query.format as string) || "json";
+    const includeMessages = req.query.includeMessages !== "false";
 
-    if (!jobId || typeof jobId !== 'string') {
+    if (!jobId || typeof jobId !== "string") {
       return res.status(400).json({
         success: false,
-        error: "Valid jobId is required"
+        error: "Valid jobId is required",
+      });
+    }
+
+    // Validate format parameter
+    if (!["json", "markdown", "full"].includes(format)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid format. Must be: json, markdown, or full",
       });
     }
 
@@ -143,17 +182,62 @@ router.get("/:jobId", async (req: Request, res: Response) => {
       });
     }
 
-    res.json({
-      success: true,
-      jobId: job.id,
-      status: job.status,
-      progress: job.progress,
-      report: job.report,
-      error: job.error,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      cachedAt: job.cachedAt,
-    });
+    // If not completed, return status only
+    if (job.status !== "completed" || !job.report) {
+      return res.json({
+        success: true,
+        jobId: job.id,
+        status: job.status,
+        progress: job.progress,
+        error: job.error,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      });
+    }
+
+    // Format response based on requested format
+    switch (format) {
+      case "markdown":
+        return res.json({
+          success: true,
+          jobId: job.id,
+          status: job.status,
+          markdown: job.report.markdown,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+          cachedAt: job.cachedAt,
+        });
+
+      case "full": {
+        // Include both JSON and markdown
+        const fullReport = transformToT3CFormat(job.report, job, includeMessages);
+        fullReport.markdown = job.report.markdown;
+        return res.json({
+          success: true,
+          jobId: job.id,
+          status: job.status,
+          report: fullReport,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+          cachedAt: job.cachedAt,
+        });
+      }
+
+      case "json":
+      default: {
+        // New T3C format (without markdown by default)
+        const t3cReport = transformToT3CFormat(job.report, job, includeMessages);
+        return res.json({
+          success: true,
+          jobId: job.id,
+          status: job.status,
+          report: t3cReport,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+          cachedAt: job.cachedAt,
+        });
+      }
+    }
   } catch (error: any) {
     console.error("Error getting report job:", error);
     res.status(500).json({
@@ -173,10 +257,10 @@ router.get("/:jobId/markdown", async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
 
-    if (!jobId || typeof jobId !== 'string') {
+    if (!jobId || typeof jobId !== "string") {
       return res.status(400).json({
         success: false,
-        error: "Valid jobId is required"
+        error: "Valid jobId is required",
       });
     }
 
@@ -202,6 +286,158 @@ router.get("/:jobId/markdown", async (req: Request, res: Response) => {
     res.send(job.report.markdown);
   } catch (error: any) {
     console.error("Error getting report markdown:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error",
+    });
+  }
+});
+
+/**
+ * GET /api/reports/:jobId/topics
+ * Get only topics data (lightweight endpoint)
+ *
+ * Response: { topics: TopicSummary[] }
+ */
+router.get("/:jobId/topics", async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+
+    if (!jobId || typeof jobId !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "Valid jobId is required",
+      });
+    }
+
+    const reportService = ReportService.getInstance();
+    const job = await reportService.getJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        error: "Job not found",
+      });
+    }
+
+    if (job.status !== "completed" || !job.report) {
+      return res.status(400).json({
+        success: false,
+        error: "Report not yet completed",
+        status: job.status,
+      });
+    }
+
+    const topics = extractTopicsSummary(job.report);
+
+    res.json({
+      success: true,
+      jobId,
+      topics,
+    });
+  } catch (error: any) {
+    console.error("Error getting topics:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error",
+    });
+  }
+});
+
+/**
+ * GET /api/reports/:jobId/visualization
+ * Get only visualization data
+ *
+ * Response: { visualization: VisualizationData }
+ */
+router.get("/:jobId/visualization", async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+
+    if (!jobId || typeof jobId !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "Valid jobId is required",
+      });
+    }
+
+    const reportService = ReportService.getInstance();
+    const job = await reportService.getJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        error: "Job not found",
+      });
+    }
+
+    if (job.status !== "completed" || !job.report) {
+      return res.status(400).json({
+        success: false,
+        error: "Report not yet completed",
+        status: job.status,
+      });
+    }
+
+    res.json({
+      success: true,
+      jobId,
+      visualization: job.report.visualization || createDefaultVisualization(),
+    });
+  } catch (error: any) {
+    console.error("Error getting visualization:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error",
+    });
+  }
+});
+
+/**
+ * GET /api/reports/:jobId/statistics
+ * Get only statistics and synthesis data
+ *
+ * Response: { statistics: ReportStatistics, synthesis: ReportSynthesis }
+ */
+router.get("/:jobId/statistics", async (req: Request, res: Response) => {
+  try {
+    const { jobId } = req.params;
+
+    if (!jobId || typeof jobId !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "Valid jobId is required",
+      });
+    }
+
+    const reportService = ReportService.getInstance();
+    const job = await reportService.getJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        error: "Job not found",
+      });
+    }
+
+    if (job.status !== "completed" || !job.report) {
+      return res.status(400).json({
+        success: false,
+        error: "Report not yet completed",
+        status: job.status,
+      });
+    }
+
+    const { statistics, synthesis } = extractStatistics(job.report);
+
+    res.json({
+      success: true,
+      jobId,
+      statistics,
+      synthesis,
+    });
+  } catch (error: any) {
+    console.error("Error getting statistics:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Internal server error",

@@ -159,17 +159,27 @@ async function assignMessagesToTopics(
   const analysisResults = await Promise.all(analysisPromises);
   console.log("[Clusterer] Cluster analysis completed");
 
-  // Build clusters
+  // Build clusters with defensive filtering
+  // Input messages should already be filtered, but we apply isSubstantive check defensively
   const clusters: MessageCluster[] = topicsWithMessages.map(
-    ([topic, topicMessages], idx) => ({
-      id: uuidv4(),
-      topic,
-      description: `Messages related to "${topic}"`,
-      messages: topicMessages,
-      opinions: analysisResults[idx].opinions,
-      summary: analysisResults[idx].summary,
-      nextSteps: analysisResults[idx].nextSteps,
-    })
+    ([topic, topicMessages], idx) => {
+      // Defensive filter: ensure only substantive messages are included
+      const substantiveMessages = topicMessages.filter(m => m.isSubstantive);
+      if (substantiveMessages.length < topicMessages.length) {
+        console.warn(
+          `[Clusterer] Defensive filter removed ${topicMessages.length - substantiveMessages.length} non-substantive messages from topic "${topic}"`
+        );
+      }
+      return {
+        id: uuidv4(),
+        topic,
+        description: `Messages related to "${topic}"`,
+        messages: substantiveMessages,
+        opinions: analysisResults[idx].opinions,
+        summary: analysisResults[idx].summary,
+        nextSteps: analysisResults[idx].nextSteps,
+      };
+    }
   );
 
   // Sort by message count (most discussed first)

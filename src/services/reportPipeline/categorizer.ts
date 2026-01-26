@@ -1,5 +1,5 @@
 import RequestManager from "../../world/requestManager";
-import { ParsedMessage, CategorizedMessage, CategorizerResult, ReportLanguage, CATEGORIZER_BATCH_SIZE } from "../../types/report";
+import { ParsedMessage, CategorizedMessage, CategorizerResult, ReportLanguage, CATEGORIZER_BATCH_SIZE, FilteringBreakdown, MIN_MESSAGE_LENGTH } from "../../types/report";
 import { parseJsonResponse } from "../../utils/llm";
 
 /**
@@ -26,17 +26,103 @@ export async function categorizeMessages(
   const batchResults = await Promise.all(batchPromises);
   const categorizedMessages = batchResults.flat();
 
-  // Log categorization summary
+  // Detailed filtering analysis
   const substantiveCount = categorizedMessages.filter(m => m.isSubstantive).length;
-  const categoryBreakdown = categorizedMessages.reduce((acc, m) => {
-    acc[m.category] = (acc[m.category] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-  console.log(`[Categorizer] Completed: ${categorizedMessages.length} messages categorized`);
-  console.log(`[Categorizer] Substantive: ${substantiveCount}, Non-substantive: ${categorizedMessages.length - substantiveCount}`);
-  console.log(`[Categorizer] Categories: ${JSON.stringify(categoryBreakdown)}`);
+  const nonSubstantiveCount = categorizedMessages.length - substantiveCount;
 
-  return { messages: categorizedMessages };
+  // Calculate filtering breakdown by reason
+  const filteringBreakdown = calculateFilteringBreakdown(categorizedMessages);
+
+  console.log(`[Categorizer] Completed: ${categorizedMessages.length} messages categorized`);
+  console.log(`[Categorizer] Substantive: ${substantiveCount}, Non-substantive: ${nonSubstantiveCount}`);
+  console.log(`[Categorizer] Filtering breakdown: greetings=${filteringBreakdown.greetings}, chitchat=${filteringBreakdown.chitchat}, shortMessages=${filteringBreakdown.shortMessages}, other=${filteringBreakdown.other}`);
+
+  // Log examples of filtered messages (for debugging)
+  const nonSubstantiveExamples = categorizedMessages
+    .filter(m => !m.isSubstantive)
+    .slice(0, 5)
+    .map(m => `"${m.content.substring(0, 30)}..." (${m.category})`);
+
+  if (nonSubstantiveExamples.length > 0) {
+    console.log(`[Categorizer] Non-substantive examples:`, nonSubstantiveExamples);
+  }
+
+  // Log detailed category breakdown by substantive status
+  const categoryBreakdown: Record<string, { substantive: number; nonSubstantive: number }> = {};
+  for (const msg of categorizedMessages) {
+    if (!categoryBreakdown[msg.category]) {
+      categoryBreakdown[msg.category] = { substantive: 0, nonSubstantive: 0 };
+    }
+    if (msg.isSubstantive) {
+      categoryBreakdown[msg.category].substantive++;
+    } else {
+      categoryBreakdown[msg.category].nonSubstantive++;
+    }
+  }
+
+  console.log(`[Categorizer] Category breakdown by substantive status:`);
+  for (const [category, counts] of Object.entries(categoryBreakdown)) {
+    const total = counts.substantive + counts.nonSubstantive;
+    const filterRate = total > 0 ? ((counts.nonSubstantive / total) * 100).toFixed(1) : "0.0";
+    console.log(`  ${category}: ${counts.substantive} substantive, ${counts.nonSubstantive} non-substantive (${filterRate}% filtered)`);
+  }
+
+  // Log overall filtering rate
+  const filteringRate = categorizedMessages.length > 0
+    ? ((nonSubstantiveCount / categorizedMessages.length) * 100).toFixed(1)
+    : "0.0";
+  console.log(`[Categorizer] Overall filtering rate: ${filteringRate}%`);
+
+  // Warning for high filtering rates
+  if (parseFloat(filteringRate) > 80) {
+    console.warn(`[Categorizer] WARNING: High filtering rate (${filteringRate}%). Consider reviewing categorizer prompts.`);
+  }
+
+  return { messages: categorizedMessages, filteringBreakdown };
+}
+
+/**
+ * Calculate filtering breakdown by reason
+ * Categories: greetings, chitchat, shortMessages, other
+ */
+function calculateFilteringBreakdown(messages: CategorizedMessage[]): FilteringBreakdown {
+  const breakdown: FilteringBreakdown = {
+    greetings: 0,
+    chitchat: 0,
+    shortMessages: 0,
+    other: 0,
+  };
+
+  // Greeting patterns (case-insensitive)
+  const greetingPatterns = /^(hi|hello|hey|안녕|하이|헬로|good\s*(morning|afternoon|evening)|greetings)[\s!.?]*$/i;
+
+  // Chitchat patterns (acknowledgments, simple responses)
+  const chitchatPatterns = /^(ok|okay|yes|no|yeah|yep|nope|thanks|thank you|thx|ty|ㅇㅇ|ㄴㄴ|ㅋ+|ㅎ+|lol|haha|good|nice|cool|great|sure|alright|got it|i see|understood)[\s!.?]*$/i;
+
+  for (const msg of messages) {
+    if (msg.isSubstantive) continue;
+
+    const content = msg.content.trim();
+
+    // Check for short messages first
+    if (content.length < MIN_MESSAGE_LENGTH) {
+      breakdown.shortMessages++;
+    }
+    // Check for greetings
+    else if (greetingPatterns.test(content) || msg.category === "greeting") {
+      breakdown.greetings++;
+    }
+    // Check for chitchat
+    else if (chitchatPatterns.test(content) || msg.category === "other" && content.length < 20) {
+      breakdown.chitchat++;
+    }
+    // Other non-substantive
+    else {
+      breakdown.other++;
+    }
+  }
+
+  return breakdown;
 }
 
 async function categorizeBatch(

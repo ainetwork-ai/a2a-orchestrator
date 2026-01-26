@@ -1,4 +1,4 @@
-import { CategorizedMessage, MessageCluster, ReportStatistics, AnalyzerResult } from "../../types/report";
+import { CategorizedMessage, MessageCluster, ReportStatistics, AnalyzerResult, FilteringBreakdown } from "../../types/report";
 
 /**
  * Analyze categorized messages and clusters to generate statistics
@@ -9,7 +9,8 @@ export function analyzeData(
   threadCount: number,
   totalMessagesBeforeSampling: number,
   wasSampled: boolean,
-  nonSubstantiveCount: number
+  nonSubstantiveCount: number,
+  filteringBreakdown?: FilteringBreakdown
 ): AnalyzerResult {
   const statistics: ReportStatistics = {
     totalMessages: messages.length,
@@ -22,6 +23,7 @@ export function analyzeData(
     totalMessagesBeforeSampling,
     wasSampled,
     nonSubstantiveCount,
+    filteringBreakdown,
   };
 
   return { statistics };

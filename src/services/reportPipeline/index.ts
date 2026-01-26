@@ -4,12 +4,15 @@ import { categorizeMessages } from "./categorizer";
 import { clusterMessages } from "./clusterer";
 import { analyzeData } from "./analyzer";
 import { synthesizeReport } from "./synthesizer";
+import { generateVisualizationData } from "./visualizer";
 import { renderMarkdown } from "./renderer";
 import {
   Report,
   ReportRequestParams,
   ReportJobProgress,
+  VisualizationData,
 } from "../../types/report";
+import { validateReportMessages, validateStatistics } from "../../utils/reportValidator";
 
 export type ProgressCallback = (progress: ReportJobProgress) => void;
 
@@ -19,6 +22,7 @@ const STEPS = [
   "Clustering by topic",
   "Analyzing statistics",
   "Synthesizing insights",
+  "Generating visualization data",
   "Generating report",
 ];
 
@@ -124,7 +128,8 @@ export async function generateReport(
     parserResult.threadCount,
     parserResult.totalMessagesBeforeSampling,
     parserResult.wasSampled,
-    filteredCount
+    filteredCount,
+    categorizerResult.filteringBreakdown
   );
 
   // Step 5: Synthesize insights across all clusters
@@ -139,9 +144,18 @@ export async function generateReport(
   );
   console.log(`[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`);
 
-  // Step 6: Render markdown report
+  // Step 6: Generate visualization data
   updateProgress(6);
   console.log(`[ReportPipeline] Step 6: ${STEPS[5]}`);
+  const visualizerResult = await generateVisualizationData(
+    clustererResult.clusters,
+    analyzerResult.statistics
+  );
+  console.log(`[ReportPipeline] Generated visualization data`);
+
+  // Step 7: Render markdown report
+  updateProgress(7);
+  console.log(`[ReportPipeline] Step 7: ${STEPS[6]}`);
   const rendererResult = renderMarkdown(
     analyzerResult.statistics,
     clustererResult.clusters,
@@ -149,17 +163,42 @@ export async function generateReport(
     { timezone: params.timezone, language: params.language }
   );
 
-  console.log(`[ReportPipeline] Report generation completed`);
-
-  return {
+  // Build report
+  const report: Report = {
     id: reportId,
     title,
     createdAt: Date.now(),
     statistics: analyzerResult.statistics,
     clusters: clustererResult.clusters,
     synthesis: synthesizerResult.synthesis,
+    visualization: visualizerResult.visualization,
     markdown: rendererResult.markdown,
   };
+
+  // Validation: Ensure data quality
+  const messageValidation = validateReportMessages(report);
+  const statsValidation = validateStatistics(report.statistics);
+
+  if (!messageValidation.isValid) {
+    console.error("[ReportPipeline] CRITICAL: Non-substantive messages in output!");
+    console.error(messageValidation.errors);
+    throw new Error("Report validation failed: Non-substantive messages found in output");
+  }
+
+  if (messageValidation.warnings.length > 0) {
+    console.warn("[ReportPipeline] Message validation warnings:", messageValidation.warnings);
+  }
+
+  if (statsValidation.warnings.length > 0) {
+    console.warn("[ReportPipeline] Statistics validation warnings:", statsValidation.warnings);
+  }
+
+  console.log(
+    `[ReportPipeline] Validation passed: ${report.clusters.length} clusters, ${report.statistics.totalMessages} substantive messages`
+  );
+  console.log(`[ReportPipeline] Report generation completed`);
+
+  return report;
 }
 
 export { parseThreads } from "./parser";
@@ -167,4 +206,5 @@ export { categorizeMessages } from "./categorizer";
 export { clusterMessages } from "./clusterer";
 export { synthesizeReport } from "./synthesizer";
 export { analyzeData } from "./analyzer";
+export { generateVisualizationData } from "./visualizer";
 export { renderMarkdown } from "./renderer";
