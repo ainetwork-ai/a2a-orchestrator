@@ -1,408 +1,264 @@
-import RequestManager from "../../world/requestManager";
-import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage, ClusterSummary, ActionItem, Opinion, CLUSTERER_BATCH_SIZE, SAMPLE_SIZE_FOR_TOPICS, MAX_SAMPLE_MESSAGES_PER_CLUSTER } from "../../types/report";
-import { v4 as uuidv4 } from "uuid";
-import { parseJsonResponse } from "../../utils/llm";
+/**
+ * Embedding-based Clusterer for TRD 12
+ *
+ * Replaces LLM-based clustering with UMAP dimensionality reduction + K-means.
+ * Provides deterministic, cacheable clustering with lower cost.
+ */
+
+import { UMAP } from "umap-js";
+import { MessageCluster, CategorizedMessage } from "../../types/report";
+import {
+  CategorizedEmbeddedMessage,
+  ClustererVisualization,
+  EmbeddingClustererResult,
+} from "../../types/embedding";
 
 /**
- * Cluster messages by topic and gather opinions using LLM
+ * Default configuration for clustering
  */
-export async function clusterMessages(
-  messages: CategorizedMessage[],
-  apiUrl: string,
-  model: string,
-  language: ReportLanguage = "en"
-): Promise<ClustererResult> {
-  console.log(`[Clusterer] Starting clustering: ${messages.length} messages, language=${language}`);
+const CLUSTER_CONFIG = {
+  defaultNumClusters: 8,
+  minMessagesForClustering: 10,
+  umapNComponents: 2,
+  umapNNeighbors: 15,
+  umapMinDist: 0.1,
+  umapSpread: 1.0,
+  kMeansMaxIterations: 100,
+} as const;
 
+/**
+ * Cluster messages using UMAP + K-means
+ *
+ * @param messages - Categorized messages with embeddings
+ * @param numClusters - Target number of clusters (default: 8)
+ * @returns Clusters with visualization data
+ */
+export async function clusterByEmbedding(
+  messages: CategorizedEmbeddedMessage[],
+  numClusters: number = CLUSTER_CONFIG.defaultNumClusters
+): Promise<EmbeddingClustererResult> {
+  console.log(`[Clusterer] Starting clustering: ${messages.length} messages, target ${numClusters} clusters`);
+
+  // Handle edge cases
   if (messages.length === 0) {
-    console.warn("[Clusterer] No substantive messages to cluster");
-    return { clusters: [] };
+    return {
+      clusters: [],
+      visualization: { points: [] },
+    };
   }
 
-  // First, identify main topics
-  console.log("[Clusterer] Step 1: Identifying topics...");
-  const topics = await identifyTopics(messages, apiUrl, model, language);
-  console.log(`[Clusterer] Identified ${topics.length} topics:`, topics);
+  if (messages.length < CLUSTER_CONFIG.minMessagesForClustering) {
+    console.log(`[Clusterer] Too few messages (${messages.length}), creating single cluster`);
+    return createSingleCluster(messages);
+  }
 
-  // Then, assign messages to topics and gather opinions
-  console.log("[Clusterer] Step 2: Assigning messages to topics...");
-  const clusters = await assignMessagesToTopics(messages, topics, apiUrl, model, language);
-  console.log(`[Clusterer] Created ${clusters.length} clusters`);
+  // Adjust cluster count if necessary
+  const effectiveNumClusters = Math.min(numClusters, Math.floor(messages.length / 2));
 
-  return { clusters };
-}
+  // 1. UMAP dimensionality reduction (1536D → 2D)
+  console.log(`[Clusterer] Running UMAP dimensionality reduction...`);
+  const embeddings = messages.map((m) => m.embedding);
 
-async function identifyTopics(
-  messages: CategorizedMessage[],
-  apiUrl: string,
-  model: string,
-  language: ReportLanguage
-): Promise<string[]> {
-  // Sample messages if too many (to reduce token usage)
-  const sampleSize = Math.min(messages.length, SAMPLE_SIZE_FOR_TOPICS);
-  const sampledMessages = messages
-    .sort(() => Math.random() - 0.5)
-    .slice(0, sampleSize);
+  const umap = new UMAP({
+    nComponents: CLUSTER_CONFIG.umapNComponents,
+    nNeighbors: Math.min(CLUSTER_CONFIG.umapNNeighbors, messages.length - 1),
+    minDist: CLUSTER_CONFIG.umapMinDist,
+    spread: CLUSTER_CONFIG.umapSpread,
+  });
 
-  const messageContents = sampledMessages.map(m => m.content).join("\n---\n");
+  const reduced = umap.fit(embeddings);
+  console.log(`[Clusterer] UMAP complete: ${reduced.length} points in 2D`);
 
-  const langInstruction = language === "ko"
-    ? "IMPORTANT: Write all topic names and descriptions in Korean."
-    : "Write all topic names and descriptions in English.";
+  // 2. K-means clustering
+  console.log(`[Clusterer] Running K-means with ${effectiveNumClusters} clusters...`);
+  const clusterAssignments = kMeans(reduced, effectiveNumClusters);
 
-  const prompt = `Analyze the following user messages and identify the main topics/themes being discussed.
+  // 3. Group messages by cluster
+  const clusterMap = new Map<number, Array<CategorizedEmbeddedMessage & { x: number; y: number }>>();
 
-${langInstruction}
+  messages.forEach((msg, i) => {
+    const clusterId = clusterAssignments[i];
+    const [x, y] = reduced[i];
 
-Messages:
-${messageContents}
-
-Instructions:
-1. Identify 3-10 main topics that emerge from these messages
-2. Topics should be specific enough to be meaningful but broad enough to group multiple messages
-3. Focus on what users are asking about or discussing
-
-Respond in JSON format only:
-{
-  "topics": [
-    {
-      "name": "Topic name",
-      "description": "Brief description of what this topic covers"
+    if (!clusterMap.has(clusterId)) {
+      clusterMap.set(clusterId, []);
     }
-  ]
-}`;
 
-  try {
-    const requestManager = RequestManager.getInstance();
-    const response = await requestManager.request(
-      apiUrl,
-      model,
-      [{ role: "user", content: prompt }],
-      1500,
-      0.3
-    );
-
-    const parsed = parseJsonResponse<{ topics?: { name: string }[] }>(response);
-    return parsed.topics?.map((t) => t.name) || [];
-  } catch (error) {
-    console.error("[Clusterer] Error identifying topics:", error);
-    // Fallback: use categories as topics
-    const categories = [...new Set(messages.map(m => m.category))];
-    return categories;
-  }
-}
-
-async function assignMessagesToTopics(
-  messages: CategorizedMessage[],
-  topics: string[],
-  apiUrl: string,
-  model: string,
-  language: ReportLanguage
-): Promise<MessageCluster[]> {
-  if (topics.length === 0) {
-    console.warn("[Clusterer] No topics to assign messages to - returning empty clusters");
-    return [];
-  }
-  console.log(`[Clusterer] Assigning ${messages.length} messages to ${topics.length} topics: [${topics.join(", ")}]`);
-
-  // Process in batches (parallel)
-  const assignments: Map<string, CategorizedMessage[]> = new Map();
-  topics.forEach(topic => assignments.set(topic, []));
-
-  // Create all batch promises in parallel
-  const batchPromises: Promise<Record<string, CategorizedMessage[]>>[] = [];
-  for (let i = 0; i < messages.length; i += CLUSTERER_BATCH_SIZE) {
-    const batch = messages.slice(i, i + CLUSTERER_BATCH_SIZE);
-    batchPromises.push(assignBatchToTopics(batch, topics, apiUrl, model));
-  }
-  console.log(`[Clusterer] Created ${batchPromises.length} assignment batch promises`);
-
-  // Wait for all batches to complete
-  const batchResults = await Promise.all(batchPromises);
-  console.log("[Clusterer] All assignment batches completed");
-
-  // Merge results
-  for (const batchAssignments of batchResults) {
-    for (const [topic, msgs] of Object.entries(batchAssignments)) {
-      const existing = assignments.get(topic) || [];
-      assignments.set(topic, [...existing, ...msgs]);
-    }
-  }
-
-  // Create clusters and summarize opinions for each (parallel)
-  const topicsWithMessages = Array.from(assignments.entries()).filter(
-    ([, msgs]) => msgs.length > 0
-  );
-
-  // Log assignment results
-  const assignmentSummary = Array.from(assignments.entries())
-    .map(([topic, msgs]) => `${topic}:${msgs.length}`)
-    .join(", ");
-  console.log(`[Clusterer] Assignment results: ${assignmentSummary}`);
-  console.log(`[Clusterer] Topics with messages: ${topicsWithMessages.length} / ${topics.length}`);
-
-  if (topicsWithMessages.length === 0) {
-    console.warn("[Clusterer] No topics have any assigned messages");
-    console.log("[Clusterer] Debug info:", {
-      totalMessages: messages.length,
-      totalTopics: topics.length,
-      batchResults: batchResults.map(br => Object.keys(br).length)
+    clusterMap.get(clusterId)!.push({
+      ...msg,
+      x,
+      y,
     });
-    return [];
+  });
+
+  // 4. Convert to MessageCluster format (labels will be added by ClusterAnalyzer)
+  const clusters: MessageCluster[] = Array.from(clusterMap.entries())
+    .filter(([_, msgs]) => msgs.length > 0)
+    .map(([clusterId, msgs]) => ({
+      id: `cluster-${clusterId}`,
+      topic: `Cluster ${clusterId + 1}`, // Temporary, ClusterAnalyzer will update
+      description: "",
+      messages: msgs,
+      opinions: [], // ClusterAnalyzer will populate
+      summary: {
+        consensus: [],
+        conflicting: [],
+        sentiment: calculateClusterSentiment(msgs),
+      },
+      nextSteps: [], // ClusterAnalyzer will populate
+    }));
+
+  // 5. Build visualization data
+  const visualization: ClustererVisualization = {
+    points: messages.map((msg, i) => ({
+      id: msg.id,
+      x: reduced[i][0],
+      y: reduced[i][1],
+      clusterId: clusterAssignments[i],
+    })),
+  };
+
+  console.log(`[Clusterer] Complete: ${clusters.length} clusters created`);
+  const clusterSizes = clusters.map((c) => `${c.topic}(${c.messages.length})`).join(", ");
+  console.log(`[Clusterer] Cluster sizes: ${clusterSizes}`);
+
+  return { clusters, visualization };
+}
+
+/**
+ * K-means clustering algorithm with deterministic seeding
+ */
+function kMeans(
+  data: number[][],
+  k: number,
+  maxIterations: number = CLUSTER_CONFIG.kMeansMaxIterations
+): number[] {
+  const n = data.length;
+
+  if (n === 0) return [];
+  if (k >= n) {
+    // Each point is its own cluster
+    return data.map((_, i) => i);
   }
 
-  // Pre-generate cluster IDs for opinion ID generation (TRD 05)
-  const clusterIds = topicsWithMessages.map(() => uuidv4());
+  // Deterministic initialization: select evenly spaced points
+  const centroids: number[][] = [];
+  const step = Math.floor(n / k);
+  for (let i = 0; i < k; i++) {
+    centroids.push([...data[i * step]]);
+  }
 
-  // Analyze clusters in parallel (opinions + summary + next steps)
-  console.log(`[Clusterer] Analyzing ${topicsWithMessages.length} clusters...`);
-  const analysisPromises = topicsWithMessages.map(([topic, topicMessages], idx) =>
-    analyzeCluster(topicMessages, topic, apiUrl, model, language, clusterIds[idx])
-  );
-  const analysisResults = await Promise.all(analysisPromises);
-  console.log("[Clusterer] Cluster analysis completed");
+  let assignments = new Array(n).fill(0);
 
-  // Build clusters with defensive filtering
-  // Input messages should already be filtered, but we apply isSubstantive check defensively
-  const clusters: MessageCluster[] = topicsWithMessages.map(
-    ([topic, topicMessages], idx) => {
-      // Defensive filter: ensure only substantive messages are included
-      const substantiveMessages = topicMessages.filter(m => m.isSubstantive);
-      if (substantiveMessages.length < topicMessages.length) {
-        console.warn(
-          `[Clusterer] Defensive filter removed ${topicMessages.length - substantiveMessages.length} non-substantive messages from topic "${topic}"`
+  for (let iter = 0; iter < maxIterations; iter++) {
+    // Assign each point to nearest centroid
+    const newAssignments = data.map((point) => {
+      let minDist = Infinity;
+      let minIdx = 0;
+
+      for (let c = 0; c < k; c++) {
+        const dist = euclideanDistance(point, centroids[c]);
+        if (dist < minDist) {
+          minDist = dist;
+          minIdx = c;
+        }
+      }
+
+      return minIdx;
+    });
+
+    // Check for convergence
+    if (arraysEqual(assignments, newAssignments)) {
+      break;
+    }
+    assignments = newAssignments;
+
+    // Update centroids
+    for (let c = 0; c < k; c++) {
+      const clusterPoints = data.filter((_, i) => assignments[i] === c);
+      if (clusterPoints.length > 0) {
+        const dim = data[0].length;
+        centroids[c] = new Array(dim).fill(0).map((_, d) =>
+          clusterPoints.reduce((sum, p) => sum + p[d], 0) / clusterPoints.length
         );
       }
-      return {
-        id: clusterIds[idx], // Use pre-generated ID (TRD 05)
-        topic,
-        description: `Messages related to "${topic}"`,
-        messages: substantiveMessages,
-        opinions: analysisResults[idx].opinions,
-        summary: analysisResults[idx].summary,
-        nextSteps: analysisResults[idx].nextSteps,
-      };
     }
-  );
-
-  // Sort by message count (most discussed first)
-  clusters.sort((a, b) => b.messages.length - a.messages.length);
-
-  return clusters;
-}
-
-async function assignBatchToTopics(
-  messages: CategorizedMessage[],
-  topics: string[],
-  apiUrl: string,
-  model: string
-): Promise<Record<string, CategorizedMessage[]>> {
-  const messagesForPrompt = messages.map((m, idx) => ({
-    index: idx,
-    content: m.content,
-  }));
-
-  const prompt = `Assign each message to the most relevant topic by topic number.
-
-Topics:
-${topics.map((t, i) => `${i + 1}. ${t}`).join("\n")}
-
-Messages:
-${JSON.stringify(messagesForPrompt, null, 2)}
-
-Instructions:
-- Assign each message to exactly one topic using the topic NUMBER (1, 2, 3, etc.)
-- If a message doesn't fit any topic well, assign it to the closest match
-
-Respond in JSON format only:
-{
-  "assignments": [
-    { "index": 0, "topic_number": 1 }
-  ]
-}`;
-
-  try {
-    const requestManager = RequestManager.getInstance();
-    const response = await requestManager.request(
-      apiUrl,
-      model,
-      [{ role: "user", content: prompt }],
-      1500,
-      0.3
-    );
-
-    const parsed = parseJsonResponse<{ assignments?: { index: number; topic_number: number; topic?: string }[] }>(response);
-    const result: Record<string, CategorizedMessage[]> = {};
-    topics.forEach(t => (result[t] = []));
-
-    let matchedCount = 0;
-    for (const assignment of parsed.assignments || []) {
-      const msg = messages[assignment.index];
-      // Use topic_number (1-indexed) to get the actual topic name
-      const topicIndex = (assignment.topic_number ?? 0) - 1;
-      const topic = topics[topicIndex] || assignment.topic; // Fallback to topic name if provided
-
-      if (msg && topic && result[topic] !== undefined) {
-        result[topic].push(msg);
-        matchedCount++;
-      }
-    }
-    console.log(`[Clusterer] Batch assignment: ${matchedCount}/${messages.length} messages matched`);
-
-    return result;
-  } catch (error) {
-    console.error("[Clusterer] Error assigning batch to topics:", error);
-    // Fallback: assign all to first topic
-    const result: Record<string, CategorizedMessage[]> = {};
-    topics.forEach(t => (result[t] = []));
-    if (topics.length > 0) {
-      result[topics[0]] = messages;
-    }
-    return result;
   }
-}
 
-interface ClusterAnalysisResult {
-  opinions: Opinion[];  // TRD 05: Changed from string[] to Opinion[]
-  summary: ClusterSummary;
-  nextSteps: ActionItem[];
+  return assignments;
 }
 
 /**
- * Helper to create Opinion object from string
- * Grounding fields (supportingMessages, mentionCount) will be filled later by grounding step
+ * Calculate Euclidean distance between two points
  */
-function createOpinion(
-  text: string,
-  type: "consensus" | "conflicting" | "general",
-  clusterId: string,
-  index: number
-): Opinion {
-  return {
-    id: `${clusterId}-op-${index}`,
-    text,
-    type,
-    supportingMessages: [],  // Will be filled by grounding step (TRD 05)
-    mentionCount: 0,         // Will be filled by grounding step (TRD 05)
-  };
+function euclideanDistance(a: number[], b: number[]): number {
+  return Math.sqrt(a.reduce((sum, val, i) => sum + (val - b[i]) ** 2, 0));
 }
 
-async function analyzeCluster(
-  messages: CategorizedMessage[],
-  topic: string,
-  apiUrl: string,
-  model: string,
-  language: ReportLanguage,
-  clusterId?: string
-): Promise<ClusterAnalysisResult> {
-  const cId = clusterId || uuidv4();
-  const defaultResult: ClusterAnalysisResult = {
-    opinions: [createOpinion(`${messages.length} messages about this topic`, "general", cId, 0)],
-    summary: { consensus: [], conflicting: [], sentiment: "neutral" },
+/**
+ * Check if two arrays are equal
+ */
+function arraysEqual(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/**
+ * Calculate overall sentiment for a cluster
+ */
+function calculateClusterSentiment(
+  messages: CategorizedMessage[]
+): "positive" | "negative" | "mixed" | "neutral" {
+  const counts = { positive: 0, negative: 0, neutral: 0 };
+
+  messages.forEach((m) => {
+    const sentiment = m.sentiment || "neutral";
+    counts[sentiment]++;
+  });
+
+  const total = messages.length;
+  if (total === 0) return "neutral";
+
+  const positiveRatio = counts.positive / total;
+  const negativeRatio = counts.negative / total;
+
+  if (positiveRatio > 0.6) return "positive";
+  if (negativeRatio > 0.6) return "negative";
+  if (counts.positive > 0 && counts.negative > 0) return "mixed";
+
+  return "neutral";
+}
+
+/**
+ * Create a single cluster for small datasets
+ */
+function createSingleCluster(
+  messages: CategorizedEmbeddedMessage[]
+): EmbeddingClustererResult {
+  const cluster: MessageCluster = {
+    id: "cluster-0",
+    topic: "All Messages",
+    description: "",
+    messages,
+    opinions: [],
+    summary: {
+      consensus: [],
+      conflicting: [],
+      sentiment: calculateClusterSentiment(messages),
+    },
     nextSteps: [],
   };
 
-  if (messages.length === 0) return defaultResult;
+  const visualization: ClustererVisualization = {
+    points: messages.map((m, i) => ({
+      id: m.id,
+      x: i % 10, // Simple grid layout for small datasets
+      y: Math.floor(i / 10),
+      clusterId: 0,
+    })),
+  };
 
-  // Sample if too many messages
-  const sampleSize = Math.min(messages.length, MAX_SAMPLE_MESSAGES_PER_CLUSTER);
-  const sampledMessages = messages
-    .sort(() => Math.random() - 0.5)
-    .slice(0, sampleSize);
-
-  const messageContents = sampledMessages.map(m => m.content).join("\n---\n");
-
-  // Calculate sentiment distribution for context
-  const sentimentCounts = { positive: 0, negative: 0, neutral: 0 };
-  for (const msg of messages) {
-    if (msg.sentiment) sentimentCounts[msg.sentiment]++;
-  }
-
-  const langInstruction = language === "ko"
-    ? "IMPORTANT: Write ALL text content in Korean."
-    : "Write all text content in English.";
-
-  const prompt = `Analyze the user feedback about "${topic}" and provide actionable insights.
-
-${langInstruction}
-
-Messages (${messages.length} total, showing sample of ${sampledMessages.length}):
-${messageContents}
-
-Sentiment distribution: ${sentimentCounts.positive} positive, ${sentimentCounts.negative} negative, ${sentimentCounts.neutral} neutral
-
-Instructions:
-1. Identify 3-7 distinct opinions expressed by users
-2. Summarize common opinions (consensus) and conflicting opinions (if any)
-3. Determine overall sentiment: "positive", "negative", "mixed", or "neutral"
-4. Suggest 1-3 actionable next steps based on the feedback, with priority (high/medium/low) and rationale
-
-Respond in JSON format only:
-{
-  "opinions": [
-    "Opinion 1: ...",
-    "Opinion 2: ..."
-  ],
-  "summary": {
-    "consensus": ["Common opinion 1", "Common opinion 2"],
-    "conflicting": ["Some users want X while others prefer Y"],
-    "sentiment": "mixed"
-  },
-  "nextSteps": [
-    {
-      "action": "Specific action to take",
-      "priority": "high",
-      "rationale": "Why this is important based on user feedback"
-    }
-  ]
-}`;
-
-  try {
-    const requestManager = RequestManager.getInstance();
-    const response = await requestManager.request(
-      apiUrl,
-      model,
-      [{ role: "user", content: prompt }],
-      1500,
-      0.5
-    );
-
-    const parsed = parseJsonResponse<{
-      opinions?: any[];
-      summary?: { consensus?: string[]; conflicting?: string[]; sentiment?: "positive" | "negative" | "mixed" | "neutral" };
-      nextSteps?: { action?: string; priority?: string; rationale?: string }[];
-    }>(response);
-
-
-    const opinions: Opinion[] = (parsed.opinions || []).map((op: any, idx: number) => {
-      let text: string;
-      if (typeof op === "string") {
-        text = op;
-      } else if (typeof op === "object" && op !== null) {
-        text = op.summary || op.opinion || op.text || op.content || JSON.stringify(op);
-      } else {
-        text = String(op);
-      }
-      return createOpinion(text, "general", cId, idx);
-    });
-
-    // Extract summary
-    const summary: ClusterSummary = {
-      consensus: parsed.summary?.consensus || [],
-      conflicting: parsed.summary?.conflicting || [],
-      sentiment: parsed.summary?.sentiment || "neutral",
-    };
-
-    // Extract next steps
-    const nextSteps: ActionItem[] = (parsed.nextSteps || []).map((step: any) => ({
-      action: step.action || "",
-      priority: step.priority || "medium",
-      rationale: step.rationale || "",
-    })).filter((step: ActionItem) => step.action);
-
-    return { opinions, summary, nextSteps };
-  } catch (error) {
-    console.error("[Clusterer] Error analyzing cluster:", error);
-    return defaultResult;
-  }
+  return { clusters: [cluster], visualization };
 }
+
+// Re-export legacy function for backward compatibility during transition
+export { clusterMessages } from "./clusterer.legacy";

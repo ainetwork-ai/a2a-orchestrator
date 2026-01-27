@@ -1,91 +1,277 @@
-import RequestManager from "../../world/requestManager";
-import { ParsedMessage, CategorizedMessage, CategorizerResult, ReportLanguage, CATEGORIZER_BATCH_SIZE, FilteringBreakdown, MIN_MESSAGE_LENGTH } from "../../types/report";
-import { parseJsonResponse } from "../../utils/llm";
+/**
+ * Embedding-based Categorizer for TRD 12
+ *
+ * Replaces LLM-based categorization with embedding similarity.
+ * Provides deterministic, cacheable categorization with lower cost.
+ */
+
+import { getRedisClient } from "../../utils/redis";
+import {
+  CategorizedMessage,
+  CategorizerResult,
+  FilteringBreakdown,
+  MIN_MESSAGE_LENGTH,
+} from "../../types/report";
+import {
+  EmbeddedMessage,
+  EmbedFunction,
+  CategorizedEmbeddedMessage,
+  CATEGORY_EMBEDDING_CONFIG,
+} from "../../types/embedding";
 
 /**
- * Categorize messages using LLM
+ * Fixed categories with keywords and descriptions for embedding
+ * Matches existing category names for backward compatibility
  */
-export async function categorizeMessages(
-  messages: ParsedMessage[],
-  apiUrl: string,
-  model: string,
-  language: ReportLanguage = "en"
-): Promise<CategorizerResult> {
-  console.log(`[Categorizer] Starting categorization: ${messages.length} messages, language=${language}`);
+export const FIXED_CATEGORIES = [
+  {
+    name: "question",
+    description: "질문, 문의, 궁금한 점, 도움 요청",
+    keywords: ["어떻게", "왜", "뭐", "무엇", "언제", "어디", "?", "알려주세요", "궁금", "how", "why", "what", "when", "where"],
+  },
+  {
+    name: "request",
+    description: "기능 요청, 개선 제안, 추가 요청",
+    keywords: ["기능", "추가", "있으면", "해주세요", "원해요", "제안", "바라", "feature", "add", "want", "please"],
+  },
+  {
+    name: "feedback",
+    description: "일반적인 피드백, 의견, 긍정적 반응",
+    keywords: ["좋아요", "감사", "최고", "만족", "괜찮", "생각", "의견", "good", "great", "thanks", "nice", "love"],
+  },
+  {
+    name: "complaint",
+    description: "불만, 버그 신고, 문제 제기, 오류 보고",
+    keywords: ["오류", "버그", "안됨", "안 됨", "문제", "에러", "불만", "왜 안", "error", "bug", "broken", "fix", "issue"],
+  },
+  {
+    name: "information",
+    description: "정보 공유, 알림, 참고 사항",
+    keywords: ["알려드", "공유", "참고", "정보", "안내", "notice", "info", "fyi", "share"],
+  },
+  {
+    name: "greeting",
+    description: "인사, 간단한 대화, 환영",
+    keywords: ["안녕", "하이", "헬로", "반가", "hi", "hello", "hey", "good morning", "good afternoon"],
+    isNonSubstantive: true,
+  },
+  {
+    name: "other",
+    description: "기타, 분류 불가",
+    keywords: [],
+  },
+] as const;
 
-  // Create all batch promises in parallel
-  const batchPromises: Promise<CategorizedMessage[]>[] = [];
+/**
+ * Patterns for non-substantive messages
+ */
+export const NON_SUBSTANTIVE_PATTERNS = {
+  // Greeting patterns
+  greetings: /^(hi|hello|hey|안녕|하이|헬로|good\s*(morning|afternoon|evening)|greetings)[\s!.?]*$/i,
+  // Simple acknowledgment patterns
+  chitchat: /^(ok|okay|yes|no|yeah|yep|nope|thanks|thank you|thx|ty|ㅇㅇ|ㄴㄴ|ㅋ+|ㅎ+|lol|haha|good|nice|cool|great|sure|alright|got it|i see|understood)[\s!.?]*$/i,
+  // Bot identity questions
+  botQuestions: /^(who are you|what are you|누구|뭐야|너 뭐야|what is this)[\s?]*$/i,
+};
 
-  for (let i = 0; i < messages.length; i += CATEGORIZER_BATCH_SIZE) {
-    const batch = messages.slice(i, i + CATEGORIZER_BATCH_SIZE);
-    batchPromises.push(categorizeBatch(batch, apiUrl, model, language));
+// Category embeddings cache (in-memory singleton)
+let categoryEmbeddings: Map<string, number[]> | null = null;
+
+/**
+ * Initialize category embeddings with Redis caching
+ */
+export async function initializeCategoryEmbeddings(
+  embedFn: EmbedFunction
+): Promise<void> {
+  if (categoryEmbeddings) {
+    return; // Already initialized
   }
-  console.log(`[Categorizer] Created ${batchPromises.length} batch promises (batch size: ${CATEGORIZER_BATCH_SIZE})`);
 
-  // Wait for all batches to complete
-  const batchResults = await Promise.all(batchPromises);
-  const categorizedMessages = batchResults.flat();
+  const redis = getRedisClient();
 
-  // Detailed filtering analysis
-  const substantiveCount = categorizedMessages.filter(m => m.isSubstantive).length;
-  const nonSubstantiveCount = categorizedMessages.length - substantiveCount;
-
-  // Calculate filtering breakdown by reason
-  const filteringBreakdown = calculateFilteringBreakdown(categorizedMessages);
-
-  console.log(`[Categorizer] Completed: ${categorizedMessages.length} messages categorized`);
-  console.log(`[Categorizer] Substantive: ${substantiveCount}, Non-substantive: ${nonSubstantiveCount}`);
-  console.log(`[Categorizer] Filtering breakdown: greetings=${filteringBreakdown.greetings}, chitchat=${filteringBreakdown.chitchat}, shortMessages=${filteringBreakdown.shortMessages}, other=${filteringBreakdown.other}`);
-
-  // Log examples of filtered messages (for debugging)
-  const nonSubstantiveExamples = categorizedMessages
-    .filter(m => !m.isSubstantive)
-    .slice(0, 5)
-    .map(m => `"${m.content.substring(0, 30)}..." (${m.category})`);
-
-  if (nonSubstantiveExamples.length > 0) {
-    console.log(`[Categorizer] Non-substantive examples:`, nonSubstantiveExamples);
-  }
-
-  // Log detailed category breakdown by substantive status
-  const categoryBreakdown: Record<string, { substantive: number; nonSubstantive: number }> = {};
-  for (const msg of categorizedMessages) {
-    if (!categoryBreakdown[msg.category]) {
-      categoryBreakdown[msg.category] = { substantive: 0, nonSubstantive: 0 };
+  // Check Redis cache first
+  const cached = await redis.get(CATEGORY_EMBEDDING_CONFIG.cacheKey);
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      categoryEmbeddings = new Map(Object.entries(parsed));
+      console.log("[Categorizer] Loaded category embeddings from cache");
+      return;
+    } catch {
+      // Invalid cache, regenerate
     }
-    if (msg.isSubstantive) {
-      categoryBreakdown[msg.category].substantive++;
-    } else {
-      categoryBreakdown[msg.category].nonSubstantive++;
-    }
   }
 
-  console.log(`[Categorizer] Category breakdown by substantive status:`);
-  for (const [category, counts] of Object.entries(categoryBreakdown)) {
-    const total = counts.substantive + counts.nonSubstantive;
-    const filterRate = total > 0 ? ((counts.nonSubstantive / total) * 100).toFixed(1) : "0.0";
-    console.log(`  ${category}: ${counts.substantive} substantive, ${counts.nonSubstantive} non-substantive (${filterRate}% filtered)`);
-  }
+  // Generate new embeddings
+  console.log("[Categorizer] Generating category embeddings...");
+  categoryEmbeddings = new Map();
 
-  // Log overall filtering rate
-  const filteringRate = categorizedMessages.length > 0
-    ? ((nonSubstantiveCount / categorizedMessages.length) * 100).toFixed(1)
-    : "0.0";
-  console.log(`[Categorizer] Overall filtering rate: ${filteringRate}%`);
+  const texts = FIXED_CATEGORIES.map(
+    (c) => `${c.name}: ${c.description}. Keywords: ${c.keywords.join(", ")}`
+  );
 
-  // Warning for high filtering rates
-  if (parseFloat(filteringRate) > 80) {
-    console.warn(`[Categorizer] WARNING: High filtering rate (${filteringRate}%). Consider reviewing categorizer prompts.`);
-  }
+  const embeddings = await embedFn(texts);
 
-  return { messages: categorizedMessages, filteringBreakdown };
+  FIXED_CATEGORIES.forEach((cat, i) => {
+    categoryEmbeddings!.set(cat.name, embeddings[i]);
+  });
+
+  // Cache in Redis
+  await redis.setEx(
+    CATEGORY_EMBEDDING_CONFIG.cacheKey,
+    CATEGORY_EMBEDDING_CONFIG.cacheTTLSeconds,
+    JSON.stringify(Object.fromEntries(categoryEmbeddings))
+  );
+
+  console.log("[Categorizer] Category embeddings generated and cached");
 }
 
 /**
- * Calculate filtering breakdown by reason
- * Categories: greetings, chitchat, shortMessages, other
+ * Calculate cosine similarity between two vectors
  */
-function calculateFilteringBreakdown(messages: CategorizedMessage[]): FilteringBreakdown {
+export function cosineSimilarity(a: number[], b: number[]): number {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denominator === 0) return 0;
+
+  return dotProduct / denominator;
+}
+
+/**
+ * Check if a message is substantive (has analytical value)
+ */
+export function checkIsSubstantive(content: string, category: string): boolean {
+  const trimmed = content.trim();
+
+  // 1. Too short
+  if (trimmed.length < MIN_MESSAGE_LENGTH) {
+    return false;
+  }
+
+  // 2. Greeting category
+  if (category === "greeting") {
+    return false;
+  }
+
+  // 3. Pattern matching
+  if (NON_SUBSTANTIVE_PATTERNS.greetings.test(trimmed)) {
+    return false;
+  }
+  if (NON_SUBSTANTIVE_PATTERNS.chitchat.test(trimmed)) {
+    return false;
+  }
+  if (NON_SUBSTANTIVE_PATTERNS.botQuestions.test(trimmed)) {
+    return false;
+  }
+
+  // 4. Very short messages with only punctuation
+  if (trimmed.length < 20) {
+    const withoutPunctuation = trimmed.replace(/[?!.\s]/g, "");
+    if (!/[a-zA-Z가-힣]/.test(withoutPunctuation)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Detect sentiment with negative keyword priority
+ * Handles cases like "좋아요 버튼이 안 눌려요" (negative, not positive)
+ */
+export function detectSentiment(
+  content: string
+): "positive" | "negative" | "neutral" {
+  const lower = content.toLowerCase();
+
+  // Negative keywords (check first - higher priority)
+  const negativeKeywords = [
+    "안됨", "안 됨", "안돼", "안 돼", "못", "없", "싫", "별로", "불만",
+    "나쁘", "최악", "실망", "짜증", "화나", "문제", "오류", "버그",
+    "에러", "고장", "망", "안되", "안 되", "not working", "broken",
+    "error", "bug", "issue", "problem", "bad", "worst", "terrible",
+    "disappointed", "frustrated", "angry"
+  ];
+
+  // Positive keywords
+  const positiveKeywords = [
+    "좋", "감사", "최고", "만족", "잘", "굿", "훌륭", "대박", "멋",
+    "짱", "완벽", "편리", "유용", "좋아", "사랑", "👍", "❤️", "🎉",
+    "good", "great", "awesome", "amazing", "love", "thanks", "perfect",
+    "excellent", "wonderful", "helpful", "useful"
+  ];
+
+  // Check for negative context first (priority)
+  const hasNegativeContext = negativeKeywords.some((w) => lower.includes(w));
+  const hasPositiveContext = positiveKeywords.some((w) => lower.includes(w));
+
+  // Negative takes priority (handles "좋아요 버튼이 안 눌려요" case)
+  if (hasNegativeContext) {
+    return "negative";
+  }
+
+  if (hasPositiveContext) {
+    return "positive";
+  }
+
+  return "neutral";
+}
+
+/**
+ * Categorize messages using embedding similarity
+ */
+export function categorizeByEmbedding(
+  messages: EmbeddedMessage[]
+): CategorizedEmbeddedMessage[] {
+  if (!categoryEmbeddings) {
+    throw new Error(
+      "Category embeddings not initialized. Call initializeCategoryEmbeddings first."
+    );
+  }
+
+  return messages.map((msg) => {
+    // Find best matching category
+    let bestCategory = "other";
+    let bestScore = -1;
+
+    for (const [category, embedding] of categoryEmbeddings!) {
+      const score = cosineSimilarity(msg.embedding, embedding);
+      if (score > bestScore) {
+        bestScore = score;
+        bestCategory = category;
+      }
+    }
+
+    // Detect sentiment
+    const sentiment = detectSentiment(msg.content);
+
+    // Check if substantive
+    const isSubstantive = checkIsSubstantive(msg.content, bestCategory);
+
+    return {
+      ...msg,
+      category: bestCategory,
+      sentiment,
+      isSubstantive,
+    };
+  });
+}
+
+/**
+ * Calculate filtering breakdown for non-substantive messages
+ */
+export function calculateFilteringBreakdown(
+  messages: CategorizedMessage[]
+): FilteringBreakdown {
   const breakdown: FilteringBreakdown = {
     greetings: 0,
     chitchat: 0,
@@ -93,31 +279,21 @@ function calculateFilteringBreakdown(messages: CategorizedMessage[]): FilteringB
     other: 0,
   };
 
-  // Greeting patterns (case-insensitive)
-  const greetingPatterns = /^(hi|hello|hey|안녕|하이|헬로|good\s*(morning|afternoon|evening)|greetings)[\s!.?]*$/i;
-
-  // Chitchat patterns (acknowledgments, simple responses)
-  const chitchatPatterns = /^(ok|okay|yes|no|yeah|yep|nope|thanks|thank you|thx|ty|ㅇㅇ|ㄴㄴ|ㅋ+|ㅎ+|lol|haha|good|nice|cool|great|sure|alright|got it|i see|understood)[\s!.?]*$/i;
-
   for (const msg of messages) {
     if (msg.isSubstantive) continue;
 
     const content = msg.content.trim();
 
-    // Check for short messages first
     if (content.length < MIN_MESSAGE_LENGTH) {
       breakdown.shortMessages++;
-    }
-    // Check for greetings
-    else if (greetingPatterns.test(content) || msg.category === "greeting") {
+    } else if (
+      NON_SUBSTANTIVE_PATTERNS.greetings.test(content) ||
+      msg.category === "greeting"
+    ) {
       breakdown.greetings++;
-    }
-    // Check for chitchat
-    else if (chitchatPatterns.test(content) || msg.category === "other" && content.length < 20) {
+    } else if (NON_SUBSTANTIVE_PATTERNS.chitchat.test(content)) {
       breakdown.chitchat++;
-    }
-    // Other non-substantive
-    else {
+    } else {
       breakdown.other++;
     }
   }
@@ -125,85 +301,38 @@ function calculateFilteringBreakdown(messages: CategorizedMessage[]): FilteringB
   return breakdown;
 }
 
-async function categorizeBatch(
-  messages: ParsedMessage[],
-  apiUrl: string,
-  model: string,
-  language: ReportLanguage
-): Promise<CategorizedMessage[]> {
-  const messagesForPrompt = messages.map((m, idx) => ({
-    index: idx,
-    content: m.content,
-  }));
+/**
+ * Main categorization function for pipeline integration
+ * Wraps categorizeByEmbedding with result formatting
+ */
+export async function categorizeEmbeddedMessages(
+  messages: EmbeddedMessage[],
+  embedFn: EmbedFunction
+): Promise<CategorizerResult> {
+  // Ensure category embeddings are initialized
+  await initializeCategoryEmbeddings(embedFn);
 
-  const langInstruction = language === "ko"
-    ? "IMPORTANT: Write all text fields (subCategory, intent) in Korean."
-    : "Write all text fields in English.";
+  // Categorize using embeddings
+  const categorized = categorizeByEmbedding(messages);
 
-  const prompt = `Analyze the following user messages and categorize each one.
+  // Calculate filtering breakdown
+  const filteringBreakdown = calculateFilteringBreakdown(categorized);
 
-${langInstruction}
+  // Log statistics
+  const substantiveCount = categorized.filter((m) => m.isSubstantive).length;
+  const nonSubstantiveCount = categorized.length - substantiveCount;
 
-Messages:
-${JSON.stringify(messagesForPrompt, null, 2)}
+  console.log(`[Categorizer] Completed: ${categorized.length} messages`);
+  console.log(`[Categorizer] Substantive: ${substantiveCount}, Non-substantive: ${nonSubstantiveCount}`);
+  console.log(
+    `[Categorizer] Breakdown: greetings=${filteringBreakdown.greetings}, chitchat=${filteringBreakdown.chitchat}, short=${filteringBreakdown.shortMessages}, other=${filteringBreakdown.other}`
+  );
 
-For each message, determine:
-1. category: Main category (one of: "question", "request", "feedback", "complaint", "information", "greeting", "other")
-2. subCategory: More specific sub-category (e.g., "technical_question", "feature_request", "bug_report", etc.)
-3. intent: What the user is trying to accomplish
-4. sentiment: Overall sentiment ("positive", "negative", or "neutral")
-5. isSubstantive: Boolean - Does this message have analytical value?
-   - true: Meaningful questions, requests, feedback, complaints, or information that provides insight
-   - false: Greetings, small talk, simple acknowledgments ("ok", "thanks"), identity questions ("who are you?"), or chitchat with no actionable content
-
-Respond in JSON format only:
-{
-  "results": [
-    {
-      "index": 0,
-      "category": "question",
-      "subCategory": "technical_question",
-      "intent": "Understanding how to use a feature",
-      "sentiment": "neutral",
-      "isSubstantive": true
-    }
-  ]
-}`;
-
-  try {
-    const requestManager = RequestManager.getInstance();
-    const response = await requestManager.request(
-      apiUrl,
-      model,
-      [{ role: "user", content: prompt }],
-      2000,
-      0.3
-    );
-
-    // Parse JSON response
-    const parsed = parseJsonResponse<{ results?: any[] }>(response);
-    const results = parsed.results || [];
-
-    // Map results back to messages
-    return messages.map((msg, idx) => {
-      const result = results.find((r: any) => r.index === idx) || {};
-      return {
-        ...msg,
-        category: result.category || "other",
-        subCategory: result.subCategory,
-        intent: result.intent,
-        sentiment: result.sentiment || "neutral",
-        isSubstantive: result.isSubstantive !== false, // Default to true if not specified
-      };
-    });
-  } catch (error) {
-    console.error("[Categorizer] Error categorizing batch:", error);
-    // On error, return messages with default category
-    return messages.map(msg => ({
-      ...msg,
-      category: "other",
-      sentiment: "neutral" as const,
-      isSubstantive: true, // Default to true on error
-    }));
-  }
+  return {
+    messages: categorized,
+    filteringBreakdown,
+  };
 }
+
+// Re-export legacy function for backward compatibility during transition
+export { categorizeMessages } from "./categorizer.legacy";

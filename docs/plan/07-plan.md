@@ -1,78 +1,74 @@
-# Refactoring Plan: Enhanced Report Metadata
+# Refactoring Plan: Enhanced Report Metadata (TRD 07)
 
 ## Overview
 
-이 계획은 리포트 메타데이터 확장 기능(TRD 07)을 구현합니다.
-Thread, Agent, Time 기반의 상세 분석과 카테고리별 심층 분석을 제공합니다.
+리포트 메타데이터 확장 기능을 구현합니다.
+Time 기반의 상세 분석과 카테고리별 심층 분석을 제공합니다.
+
+**핵심 변경**: TRD 12 (Embedding 기반 파이프라인) 이후 구현해야 합니다.
+- 샘플링 제거로 전체 메시지 대상 분석 가능
+- 고정 카테고리 기반으로 일관된 분석 가능
 
 ## Source Documents
 
-- `07-enhanced-metadata.md` - 리포트 메타데이터 확장
+- `docs/trd/07-enhanced-metadata.md` - 리포트 메타데이터 확장
+- `docs/trd/12-embedding-clustering.md` - 의존성 (먼저 구현 필요)
 
 ## Dependencies
 
-- **독립적 구현 가능**: 다른 TRD에 의존하지 않음
+- **TRD 12 필수**: Embedding 기반 파이프라인 구현 후 진행
 - 기존 Report Pipeline과 통합 필요
+
+---
+
+## 제거된 기능 (TRD 12 점검 후)
+
+| 기능 | 제거 이유 |
+|------|----------|
+| **ThreadBreakdown** | threadId 익명화로 제거됨, TRD 12에서도 미포함 |
+| **AgentBreakdown** | 유저 메시지 분석이라 agent breakdown은 개념적 오류 |
+| **Performance Optimization** | TRD 12에서 전체 메시지 처리, lazy loading 불필요 |
+| **Testing** | 프로젝트에 테스트 인프라 없음 |
 
 ---
 
 ## Tasks
 
-### 1. Types & Interfaces
+### Phase 1: Types & Interfaces
 
-[ ] task1 - Create `src/types/metadata.ts` with MetadataLevel type ("basic" | "detailed" | "full")
-[ ] task2 - Define ThreadBreakdown interface (messageCount, dateRange, primaryCategory, sentimentDistribution)
-[ ] task3 - Define AgentBreakdown interface (agentName, messageCount, avgLength, threadCount, activityPattern)
-[ ] task4 - Define TimeBreakdown interface (hourly, daily, weekly distributions, peakPeriods)
-[ ] task5 - Define CategoryDeepAnalysis interface (sentiment, timePattern, topKeywords, subCategories)
-[ ] task6 - Define EnhancedReportMetadata interface extending existing ReportMetadata
-[ ] task7 - Define MetadataOptions interface (level, includeThreadIds, includeAgentUrls, timezone)
+- [ ] task1 - Create `src/types/metadata.ts` with MetadataLevel type ("basic" | "detailed" | "full")
+- [ ] task2 - Define TimeBreakdown interface (hourly, daily, weekly distributions, peakPeriods)
+- [ ] task3 - Define CategoryDeepAnalysis interface (sentiment, timePattern, subCategories)
+- [ ] task4 - Define EnhancedReportMetadata interface extending existing ReportMetadata
+- [ ] task5 - Define MetadataOptions interface (level, timezone)
 
-### 2. MetadataBuilder Implementation
+### Phase 2: MetadataBuilder Implementation
 
-[ ] task8 - Create `src/services/reportPipeline/metadataBuilder.ts` base class
-[ ] task9 - Implement buildBaseMetadata() for basic level (existing metadata)
-[ ] task10 - Implement buildThreadBreakdown() for thread-level analysis
-[ ] task11 - Implement buildAgentBreakdown() for agent-level analysis
-[ ] task12 - Implement buildTimeBreakdown() for time-period analysis
-[ ] task13 - Implement buildCategoryAnalysis() for deep category analysis (full level only)
-[ ] task14 - Add helper methods: calculateSentimentDistribution, calculateCategoryDistribution
-[ ] task15 - Add helper method: calculateOverallSentiment for aggregating sentiment
+- [ ] task6 - Create `src/services/reportPipeline/metadataBuilder.ts`
+- [ ] task7 - Implement buildBaseMetadata() for basic level (existing metadata)
+- [ ] task8 - Implement buildTimeBreakdown() for time-period analysis
+- [ ] task9 - Implement buildCategoryAnalysis() for deep category analysis (detailed/full level)
+- [ ] task10 - Add helper methods: calculateSentimentDistribution, calculateCategoryDistribution
+- [ ] task11 - Add helper method: calculateOverallSentiment for aggregating sentiment
 
-### 3. Pipeline Integration
+### Phase 3: Pipeline Integration
 
-[ ] task16 - Extend ReportRequestParams to include MetadataOptions
-[ ] task17 - Modify report pipeline to pass MetadataOptions to MetadataBuilder
-[ ] task18 - Update generateReport() to use MetadataBuilder
-[ ] task19 - Ensure CategorizedMessage includes necessary context for breakdown analysis
-[ ] task20 - Add threadId tracking in parser if not already present
+- [ ] task12 - Extend ReportRequestParams to include MetadataOptions
+- [ ] task13 - Integrate MetadataBuilder into TRD 12 pipeline (after analyzer)
+- [ ] task14 - Update generateReport() to use MetadataBuilder
 
-### 4. API Updates
+### Phase 4: API Updates
 
-[ ] task21 - Add `metadata` parameter to POST /api/reports request body
-[ ] task22 - Add `metadataLevel` query parameter to GET /api/reports/:jobId
-[ ] task23 - Update response format to include enhanced metadata based on level
-[ ] task24 - Add validation for metadata options (level enum, timezone format)
-
-### 5. Performance Optimization
-
-[ ] task25 - Implement lazy loading for detailed/full metadata levels
-[ ] task26 - Add caching for computed breakdown data
-[ ] task27 - Ensure streaming/chunked computation for large message sets
-
-### 6. Testing
-
-[ ] task28 - Write unit tests for MetadataBuilder.buildThreadBreakdown()
-[ ] task29 - Write unit tests for MetadataBuilder.buildTimeBreakdown()
-[ ] task30 - Write unit tests for MetadataBuilder.buildCategoryAnalysis()
-[ ] task31 - Write integration tests for API with different metadata levels
-[ ] task32 - Write performance tests for large datasets (1000+ messages)
+- [ ] task15 - Add `metadata` parameter to POST /api/reports request body
+- [ ] task16 - Add `metadataLevel` query parameter to GET /api/reports/:jobId
+- [ ] task17 - Update response format to include enhanced metadata based on level
+- [ ] task18 - Add validation for metadata options (level enum, timezone format)
 
 ---
 
 ## Build Verification
 
-[ ] Run TypeScript build check (`source ~/.nvm/nvm.sh && nvm use 22 && npx tsc --noEmit`)
+- [ ] Run TypeScript build check (`source ~/.nvm/nvm.sh && nvm use 22 && npx tsc --noEmit`)
 
 ---
 
@@ -80,54 +76,94 @@ Thread, Agent, Time 기반의 상세 분석과 카테고리별 심층 분석을 
 
 ### Recommended Sequence:
 
-1. **Tasks 1-7**: Type definitions (foundation)
-2. **Tasks 8-15**: MetadataBuilder implementation (core logic)
-3. **Tasks 16-20**: Pipeline integration
-4. **Tasks 21-24**: API updates
-5. **Tasks 25-27**: Performance optimization
-6. **Tasks 28-32**: Testing
+1. **Tasks 1-5**: Type definitions (foundation)
+2. **Tasks 6-11**: MetadataBuilder implementation (core logic)
+3. **Tasks 12-14**: Pipeline integration
+4. **Tasks 15-18**: API updates
 
 ### Parallel Work Opportunities:
 
-- Tasks 10, 11, 12 (breakdown builders) can be developed in parallel
-- Testing (tasks 28-32) can start as soon as MetadataBuilder is complete
+- Tasks 8, 9 (TimeBreakdown, CategoryAnalysis) can be developed in parallel
+
+---
+
+## 상세 설계
+
+### TimeBreakdown Interface
+
+```typescript
+export interface TimeBreakdown {
+  hourly: Array<{
+    hour: number;  // 0-23
+    messageCount: number;
+  }>;
+  daily: Array<{
+    date: string;  // YYYY-MM-DD
+    messageCount: number;
+    sentiment: "positive" | "negative" | "mixed" | "neutral";
+  }>;
+  weekly: {
+    [key: string]: number;  // "sunday" - "saturday"
+  };
+  peakPeriods: {
+    peakHour: number;
+    peakDay: string;
+    busiestDate: string;
+  };
+}
+```
+
+### CategoryDeepAnalysis Interface
+
+```typescript
+export interface CategoryDeepAnalysis {
+  category: string;  // TRD 12 고정 카테고리: question, request, feedback, complaint, etc.
+  messageCount: number;
+  percentage: number;
+  sentiment: {
+    overall: "positive" | "negative" | "mixed" | "neutral";
+    distribution: {
+      positive: number;
+      negative: number;
+      neutral: number;
+    };
+  };
+  timePattern: {
+    peakHour: number;
+    peakDay: string;
+  };
+  subCategories: Array<{
+    name: string;
+    count: number;
+  }>;
+}
+```
+
+### MetadataLevel 설명
+
+| Level | 포함 내용 |
+|-------|----------|
+| **basic** | 기존 ReportMetadata (scope, filtering 등) |
+| **detailed** | basic + TimeBreakdown |
+| **full** | detailed + CategoryDeepAnalysis |
 
 ---
 
 ## Notes
 
-### Technical Considerations:
+### TRD 12와의 연동
 
-1. **Thread ID Availability**:
-   - Current anonymization may hide threadId
-   - MetadataBuilder should handle missing threadId gracefully
-   - Option `includeThreadIds` controls exposure in API response
+1. **전체 메시지 접근**: TRD 12에서 샘플링 제거됨 → 정확한 통계 가능
+2. **고정 카테고리**: question, request, feedback, complaint, information, greeting, other
+3. **통합 시점**: ClusterAnalyzer 이후, Grounding 이전 또는 이후
 
-2. **Agent Information**:
-   - Agent names are public info (can be included)
-   - User IDs must never be exposed
-   - AgentBreakdown may be limited by available data in CategorizedMessage
+### Timezone Handling
 
-3. **Timezone Handling**:
-   - Default to UTC for time breakdowns
-   - Support timezone option for localized analysis
-   - Use date-fns or similar for timezone conversion
+- Default to UTC for time breakdowns
+- Support timezone option for localized analysis
+- Use built-in Date APIs (no external library needed for basic support)
 
-4. **Performance Targets**:
-   - Basic metadata: < 100ms
-   - Detailed metadata: < 500ms
-   - Full metadata: < 1000ms
-
-### Data Requirements:
-
-For full metadata functionality, ensure CategorizedMessage includes:
-- `timestamp` (already present)
-- `category`, `subCategory` (already present from categorizer)
-- `sentiment` (already present)
-- `threadId` or `context.threadId` (may need enhancement)
-- `agentName`, `agentUrl` (may need enhancement from parser)
-
-### API Examples:
+### API Examples
 
 **Request with metadata options:**
 ```json
@@ -136,7 +172,6 @@ POST /api/reports
   "threadIds": ["thread-1"],
   "metadata": {
     "level": "detailed",
-    "includeThreadIds": true,
     "timezone": "Asia/Seoul"
   }
 }
@@ -147,22 +182,23 @@ POST /api/reports
 GET /api/reports/:jobId?metadataLevel=full
 ```
 
-### Memory Considerations:
-
-- Large reports (10k+ messages) may consume significant memory during breakdown computation
-- Consider streaming/iterator patterns for buildTimeBreakdown
-- Limit topKeywords, subCategories arrays to prevent response bloat
-
 ---
 
 ## Estimated Timeline
 
 | Phase | Tasks | Estimated Hours |
 |-------|-------|-----------------|
-| Types | 1-7 | 2h |
-| MetadataBuilder | 8-15 | 6h |
-| Pipeline Integration | 16-20 | 3h |
-| API Updates | 21-24 | 2h |
-| Performance | 25-27 | 3h |
-| Testing | 28-32 | 4h |
-| **Total** | | **20h (~3 days)** |
+| Types | 1-5 | 1h |
+| MetadataBuilder | 6-11 | 4h |
+| Pipeline Integration | 12-14 | 2h |
+| API Updates | 15-18 | 2h |
+| **Total** | | **9h (~1.5 days)** |
+
+---
+
+## 변경 이력
+
+| 날짜 | 변경 내용 |
+|------|----------|
+| 2026-01-27 | 초안 작성 |
+| 2026-01-27 | TRD 12 점검 후 수정: ThreadBreakdown, AgentBreakdown, Performance, Testing 제거 |

@@ -11,6 +11,7 @@ import {
   TreeLink,
   ChartData,
 } from "../../types/report";
+import { ClustererVisualization } from "../../types/embedding";
 
 /**
  * Scatter plot configuration
@@ -32,10 +33,15 @@ const PERFORMANCE_TARGET_MS = 500;
 
 /**
  * Generate all visualization data for the report
+ *
+ * @param clusters - Message clusters
+ * @param statistics - Report statistics
+ * @param umapVisualization - Optional UMAP coordinates from TRD 12 clusterer
  */
 export async function generateVisualizationData(
   clusters: MessageCluster[],
-  statistics: ReportStatistics
+  statistics: ReportStatistics,
+  umapVisualization?: ClustererVisualization
 ): Promise<VisualizerResult> {
   const startTime = performance.now();
 
@@ -43,8 +49,13 @@ export async function generateVisualizationData(
     `[Visualizer] Generating visualization data for ${clusters.length} clusters`
   );
 
+  // Use UMAP coordinates if available, otherwise generate synthetic positions
+  const scatterPlot = umapVisualization
+    ? generateScatterPlotFromUMAP(clusters, umapVisualization)
+    : generateScatterPlot(clusters, statistics, DEFAULT_CONFIG);
+
   const visualization: VisualizationData = {
-    scatterPlot: generateScatterPlot(clusters, statistics, DEFAULT_CONFIG),
+    scatterPlot,
     topicTree: generateTopicTree(clusters, false),
     charts: generateChartData(statistics, clusters),
   };
@@ -72,6 +83,99 @@ export async function generateVisualizationData(
   return {
     visualization,
     performanceMs: durationMs,
+  };
+}
+
+/**
+ * Generate scatter plot from UMAP coordinates (TRD 12)
+ */
+function generateScatterPlotFromUMAP(
+  clusters: MessageCluster[],
+  umapVisualization: ClustererVisualization
+): ScatterPlotData {
+  const points: ScatterPoint[] = [];
+
+  // Create a map of message ID to UMAP coordinates
+  const coordsMap = new Map<string, { x: number; y: number; clusterId: number }>();
+  for (const point of umapVisualization.points) {
+    coordsMap.set(point.id, { x: point.x, y: point.y, clusterId: point.clusterId });
+  }
+
+  // Calculate bounds for normalization
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  for (const point of umapVisualization.points) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y);
+    maxY = Math.max(maxY, point.y);
+  }
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+
+  // Add cluster center points
+  for (const cluster of clusters) {
+    const clusterMessages = cluster.messages.filter((m) => coordsMap.has(m.id));
+    if (clusterMessages.length === 0) continue;
+
+    // Calculate cluster center
+    let sumX = 0, sumY = 0;
+    for (const msg of clusterMessages) {
+      const coords = coordsMap.get(msg.id)!;
+      sumX += coords.x;
+      sumY += coords.y;
+    }
+    const centerX = (sumX / clusterMessages.length - minX) / rangeX;
+    const centerY = (sumY / clusterMessages.length - minY) / rangeY;
+
+    // Topic point (cluster center)
+    points.push({
+      id: cluster.id,
+      type: "topic",
+      x: centerX,
+      y: centerY,
+      label: cluster.topic,
+      size: 0.2 + Math.min(cluster.messages.length / 100, 1) * 0.8,
+      color: getSentimentColor(cluster.summary.sentiment),
+      metadata: {
+        sentiment: cluster.summary.sentiment,
+        messageCount: cluster.messages.length,
+      },
+    });
+
+    // Message points (limit for performance)
+    const messagesToPlot = clusterMessages.slice(0, 50);
+    for (const message of messagesToPlot) {
+      if (!message.isSubstantive) continue;
+
+      const coords = coordsMap.get(message.id);
+      if (!coords) continue;
+
+      points.push({
+        id: message.id,
+        type: "message",
+        x: (coords.x - minX) / rangeX,
+        y: (coords.y - minY) / rangeY,
+        label: message.content.length > 50
+          ? message.content.substring(0, 50) + "..."
+          : message.content,
+        size: 0.3,
+        color: getSentimentColor(message.sentiment || "neutral"),
+        metadata: {
+          sentiment: message.sentiment,
+          category: message.category,
+          topicId: cluster.id,
+        },
+      });
+    }
+  }
+
+  return {
+    points,
+    axes: {
+      x: { label: "UMAP Dimension 1", min: 0, max: 1 },
+      y: { label: "UMAP Dimension 2", min: 0, max: 1 },
+    },
   };
 }
 
