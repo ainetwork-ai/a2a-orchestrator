@@ -3,6 +3,7 @@ import {
   ReportStatistics,
   ValidationResult,
   MessageCluster,
+  Opinion,
 } from "../types/report";
 
 /**
@@ -152,6 +153,73 @@ export function validateClusters(clusters: MessageCluster[]): ValidationResult {
     }
     if (!cluster.summary) {
       warnings.push(`Cluster "${cluster.topic}" has no summary`);
+    }
+  }
+
+  // TRD 05: Validate grounded opinions
+  for (const cluster of clusters) {
+    const groundingValidation = validateGroundedOpinions(cluster);
+    warnings.push(...groundingValidation.warnings);
+    // Grounding errors are warnings only, not critical errors
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
+/**
+ * Validate grounded opinions in a cluster (TRD 05)
+ * Checks that supportingMessages refer to valid message IDs in the cluster
+ */
+export function validateGroundedOpinions(cluster: MessageCluster): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Get all valid message IDs in this cluster
+  const validMessageIds = new Set(cluster.messages.map(m => m.id));
+
+  for (const opinion of cluster.opinions) {
+    // Skip if not a proper Opinion object (backward compatibility)
+    if (typeof opinion === "string") {
+      warnings.push(
+        `Opinion in cluster "${cluster.topic}" is still in legacy string format`
+      );
+      continue;
+    }
+
+    // Check supportingMessages reference valid message IDs
+    if (opinion.supportingMessages && opinion.supportingMessages.length > 0) {
+      for (const msgId of opinion.supportingMessages) {
+        if (!validMessageIds.has(msgId)) {
+          warnings.push(
+            `Opinion "${opinion.id}" in cluster "${cluster.topic}" references invalid message ID "${msgId}"`
+          );
+        }
+      }
+    }
+
+    // Check mentionCount is reasonable
+    if (opinion.mentionCount > cluster.messages.length) {
+      warnings.push(
+        `Opinion "${opinion.id}" has mentionCount (${opinion.mentionCount}) exceeding cluster message count (${cluster.messages.length})`
+      );
+    }
+
+    // Check confidence is in valid range
+    if (opinion.confidence !== undefined && (opinion.confidence < 0 || opinion.confidence > 1)) {
+      warnings.push(
+        `Opinion "${opinion.id}" has invalid confidence value (${opinion.confidence}), expected 0-1`
+      );
+    }
+
+    // Warning for opinions without grounding
+    if ((!opinion.supportingMessages || opinion.supportingMessages.length === 0) && opinion.mentionCount === 0) {
+      warnings.push(
+        `Opinion "${opinion.id}" in cluster "${cluster.topic}" has no supporting messages (may indicate grounding failure)`
+      );
     }
   }
 

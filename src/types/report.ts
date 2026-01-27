@@ -33,7 +33,7 @@ export interface MessageCluster {
   topic: string;
   description: string;
   messages: CategorizedMessage[];
-  opinions: string[]; // Summary of different opinions in this cluster
+  opinions: Opinion[]; // Grounded opinions with supporting messages (TRD 05)
   summary: ClusterSummary;
   nextSteps: ActionItem[];
 }
@@ -170,17 +170,31 @@ export interface SynthesizerResult {
   synthesis: ReportSynthesis;
 }
 
+/**
+ * Grounding pipeline step result (TRD 05)
+ */
+export interface GroundingResult {
+  clusters: MessageCluster[];  // Clusters with grounded opinions
+  performanceMs?: number;      // Time taken for grounding step
+}
+
 // ============================================
-// T3C-Style Report Types (TRD 01-04)
+// T3C-Style Report Types (TRD 01-04, 05)
 // ============================================
 
 /**
- * Opinion extracted from a topic cluster
+ * Opinion extracted from a topic cluster with grounding information (TRD 05)
  */
 export interface Opinion {
   id: string;
   text: string;
   type: "consensus" | "conflicting" | "general";
+
+  // Grounding fields (TRD 05 - Phase 1A)
+  supportingMessages: string[];    // Message IDs (1-3 representative examples)
+  mentionCount: number;            // Total messages that support this opinion
+  representativeQuote?: string;    // Best single example quote
+  confidence?: number;             // 0-1, how well supported
 }
 
 /**

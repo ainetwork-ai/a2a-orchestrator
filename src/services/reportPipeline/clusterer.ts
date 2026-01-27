@@ -1,5 +1,5 @@
 import RequestManager from "../../world/requestManager";
-import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage, ClusterSummary, ActionItem, CLUSTERER_BATCH_SIZE, SAMPLE_SIZE_FOR_TOPICS, MAX_SAMPLE_MESSAGES_PER_CLUSTER } from "../../types/report";
+import { CategorizedMessage, MessageCluster, ClustererResult, ReportLanguage, ClusterSummary, ActionItem, Opinion, CLUSTERER_BATCH_SIZE, SAMPLE_SIZE_FOR_TOPICS, MAX_SAMPLE_MESSAGES_PER_CLUSTER } from "../../types/report";
 import { v4 as uuidv4 } from "uuid";
 import { parseJsonResponse } from "../../utils/llm";
 
@@ -151,10 +151,13 @@ async function assignMessagesToTopics(
     return [];
   }
 
+  // Pre-generate cluster IDs for opinion ID generation (TRD 05)
+  const clusterIds = topicsWithMessages.map(() => uuidv4());
+
   // Analyze clusters in parallel (opinions + summary + next steps)
   console.log(`[Clusterer] Analyzing ${topicsWithMessages.length} clusters...`);
-  const analysisPromises = topicsWithMessages.map(([topic, topicMessages]) =>
-    analyzeCluster(topicMessages, topic, apiUrl, model, language)
+  const analysisPromises = topicsWithMessages.map(([topic, topicMessages], idx) =>
+    analyzeCluster(topicMessages, topic, apiUrl, model, language, clusterIds[idx])
   );
   const analysisResults = await Promise.all(analysisPromises);
   console.log("[Clusterer] Cluster analysis completed");
@@ -171,7 +174,7 @@ async function assignMessagesToTopics(
         );
       }
       return {
-        id: uuidv4(),
+        id: clusterIds[idx], // Use pre-generated ID (TRD 05)
         topic,
         description: `Messages related to "${topic}"`,
         messages: substantiveMessages,
@@ -260,9 +263,28 @@ Respond in JSON format only:
 }
 
 interface ClusterAnalysisResult {
-  opinions: string[];
+  opinions: Opinion[];  // TRD 05: Changed from string[] to Opinion[]
   summary: ClusterSummary;
   nextSteps: ActionItem[];
+}
+
+/**
+ * Helper to create Opinion object from string
+ * Grounding fields (supportingMessages, mentionCount) will be filled later by grounding step
+ */
+function createOpinion(
+  text: string,
+  type: "consensus" | "conflicting" | "general",
+  clusterId: string,
+  index: number
+): Opinion {
+  return {
+    id: `${clusterId}-op-${index}`,
+    text,
+    type,
+    supportingMessages: [],  // Will be filled by grounding step (TRD 05)
+    mentionCount: 0,         // Will be filled by grounding step (TRD 05)
+  };
 }
 
 async function analyzeCluster(
@@ -270,10 +292,12 @@ async function analyzeCluster(
   topic: string,
   apiUrl: string,
   model: string,
-  language: ReportLanguage
+  language: ReportLanguage,
+  clusterId?: string
 ): Promise<ClusterAnalysisResult> {
+  const cId = clusterId || uuidv4();
   const defaultResult: ClusterAnalysisResult = {
-    opinions: [`${messages.length} messages about this topic`],
+    opinions: [createOpinion(`${messages.length} messages about this topic`, "general", cId, 0)],
     summary: { consensus: [], conflicting: [], sentiment: "neutral" },
     nextSteps: [],
   };
@@ -349,13 +373,17 @@ Respond in JSON format only:
       nextSteps?: { action?: string; priority?: string; rationale?: string }[];
     }>(response);
 
-    // Extract opinions
-    const opinions = (parsed.opinions || []).map((op: any) => {
-      if (typeof op === "string") return op;
-      if (typeof op === "object" && op !== null) {
-        return op.summary || op.opinion || op.text || op.content || JSON.stringify(op);
+
+    const opinions: Opinion[] = (parsed.opinions || []).map((op: any, idx: number) => {
+      let text: string;
+      if (typeof op === "string") {
+        text = op;
+      } else if (typeof op === "object" && op !== null) {
+        text = op.summary || op.opinion || op.text || op.content || JSON.stringify(op);
+      } else {
+        text = String(op);
       }
-      return String(op);
+      return createOpinion(text, "general", cId, idx);
     });
 
     // Extract summary

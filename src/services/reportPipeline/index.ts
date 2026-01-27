@@ -3,6 +3,7 @@ import { parseThreads } from "./parser";
 import { categorizeMessages } from "./categorizer";
 import { clusterMessages } from "./clusterer";
 import { analyzeData } from "./analyzer";
+import { groundOpinions } from "./grounding";
 import { synthesizeReport } from "./synthesizer";
 import { generateVisualizationData } from "./visualizer";
 import { renderMarkdown } from "./renderer";
@@ -21,6 +22,7 @@ const STEPS = [
   "Categorizing messages",
   "Clustering by topic",
   "Analyzing statistics",
+  "Grounding opinions",           // TRD 05: Link opinions to supporting messages
   "Synthesizing insights",
   "Generating visualization data",
   "Generating report",
@@ -132,11 +134,24 @@ export async function generateReport(
     categorizerResult.filteringBreakdown
   );
 
-  // Step 5: Synthesize insights across all clusters
+  // Step 5: Ground opinions to supporting messages (TRD 05)
   updateProgress(5);
   console.log(`[ReportPipeline] Step 5: ${STEPS[4]}`);
-  const synthesizerResult = await synthesizeReport(
+  const groundingResult = await groundOpinions(
     clustererResult.clusters,
+    apiUrl,
+    model
+  );
+  console.log(`[ReportPipeline] Grounded opinions in ${groundingResult.clusters.length} clusters`);
+  if (groundingResult.performanceMs) {
+    console.log(`[ReportPipeline] Grounding performance: ${groundingResult.performanceMs}ms`);
+  }
+
+  // Step 6: Synthesize insights across all clusters
+  updateProgress(6);
+  console.log(`[ReportPipeline] Step 6: ${STEPS[5]}`);
+  const synthesizerResult = await synthesizeReport(
+    groundingResult.clusters, // Use grounded clusters
     analyzerResult.statistics,
     apiUrl,
     model,
@@ -144,21 +159,21 @@ export async function generateReport(
   );
   console.log(`[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`);
 
-  // Step 6: Generate visualization data
-  updateProgress(6);
-  console.log(`[ReportPipeline] Step 6: ${STEPS[5]}`);
+  // Step 7: Generate visualization data
+  updateProgress(7);
+  console.log(`[ReportPipeline] Step 7: ${STEPS[6]}`);
   const visualizerResult = await generateVisualizationData(
-    clustererResult.clusters,
+    groundingResult.clusters, // Use grounded clusters
     analyzerResult.statistics
   );
   console.log(`[ReportPipeline] Generated visualization data`);
 
-  // Step 7: Render markdown report
-  updateProgress(7);
-  console.log(`[ReportPipeline] Step 7: ${STEPS[6]}`);
+  // Step 8: Render markdown report
+  updateProgress(8);
+  console.log(`[ReportPipeline] Step 8: ${STEPS[7]}`);
   const rendererResult = renderMarkdown(
     analyzerResult.statistics,
-    clustererResult.clusters,
+    groundingResult.clusters, // Use grounded clusters
     synthesizerResult.synthesis,
     { timezone: params.timezone, language: params.language }
   );
@@ -169,7 +184,7 @@ export async function generateReport(
     title,
     createdAt: Date.now(),
     statistics: analyzerResult.statistics,
-    clusters: clustererResult.clusters,
+    clusters: groundingResult.clusters, // Use grounded clusters
     synthesis: synthesizerResult.synthesis,
     visualization: visualizerResult.visualization,
     markdown: rendererResult.markdown,
@@ -204,6 +219,7 @@ export async function generateReport(
 export { parseThreads } from "./parser";
 export { categorizeMessages } from "./categorizer";
 export { clusterMessages } from "./clusterer";
+export { groundOpinions } from "./grounding";
 export { synthesizeReport } from "./synthesizer";
 export { analyzeData } from "./analyzer";
 export { generateVisualizationData } from "./visualizer";

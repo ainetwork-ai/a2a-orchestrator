@@ -36,11 +36,8 @@ export function transformToT3CFormat(
         overall: cluster.summary.sentiment,
         distribution: sentimentDistribution,
       },
-      opinions: cluster.opinions.map((text, idx) => ({
-        id: `${cluster.id}-op-${idx}`,
-        text,
-        type: "general" as const,
-      })),
+      // TRD 05: cluster.opinions is now Opinion[] with grounding info
+      opinions: transformOpinions(cluster.opinions, cluster.id),
       messages: includeMessages
         ? cluster.messages.map((msg) => transformMessage(msg))
         : [],
@@ -64,6 +61,30 @@ export function transformToT3CFormat(
     topics,
     visualization: report.visualization || createDefaultVisualization(),
   };
+}
+
+/**
+ * Transform opinions to ensure proper format (TRD 05)
+ * Handles both old string[] format and new Opinion[] format for backward compatibility
+ */
+function transformOpinions(opinions: Opinion[] | string[], clusterId: string): Opinion[] {
+  if (opinions.length === 0) return [];
+
+  // Check if already Opinion objects (TRD 05 format)
+  const firstOpinion = opinions[0];
+  if (typeof firstOpinion === "object" && firstOpinion !== null && "id" in firstOpinion) {
+    // Already Opinion[] format - return as-is
+    return opinions as Opinion[];
+  }
+
+  // Legacy string[] format - convert to Opinion objects
+  return (opinions as string[]).map((text, idx) => ({
+    id: `${clusterId}-op-${idx}`,
+    text,
+    type: "general" as const,
+    supportingMessages: [],
+    mentionCount: 0,
+  }));
 }
 
 /**
