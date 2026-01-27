@@ -100,6 +100,11 @@ export interface ReportJob {
   cachedAt?: number;
   // Request parameters for cache key
   params: ReportRequestParams;
+
+  // Metadata fields for report management (TRD 06)
+  title?: string;
+  description?: string;
+  tags?: string[];
 }
 
 export type ReportLanguage = "ko" | "en";
@@ -113,6 +118,76 @@ export interface ReportRequestParams {
   maxMessages?: number; // Max messages to analyze (default: 1000, will sample if exceeded)
   timezone?: string; // IANA timezone (e.g., "Asia/Seoul", "America/New_York")
   language?: ReportLanguage; // Report language (defaults based on timezone if not specified)
+
+  // Metadata options for report management (TRD 06)
+  title?: string; // Report title
+  description?: string; // Report description
+  tags?: string[]; // Tags for filtering/searching
+}
+
+// ============================================
+// Report Query & Pagination Types (TRD 06)
+// ============================================
+
+/**
+ * Query parameters for report job list
+ */
+export interface ReportJobQuery {
+  // Pagination
+  page?: number;
+  limit?: number;
+
+  // Filtering
+  tags?: string[];
+  startDate?: string; // ISO date string (createdAt filter)
+  endDate?: string; // ISO date string (createdAt filter)
+  status?: ReportJobStatus;
+
+  // Search
+  search?: string; // Search in title and description
+
+  // Sorting
+  sortBy?: "createdAt" | "updatedAt" | "title";
+  sortOrder?: "asc" | "desc";
+}
+
+/**
+ * Paginated result wrapper
+ */
+export interface PaginatedResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+/**
+ * Summary of a report job for list view
+ */
+export interface ReportJobSummary {
+  jobId: string;
+  status: ReportJobStatus;
+  progress?: ReportJobProgress;
+  createdAt: number;
+  updatedAt: number;
+  cachedAt?: number;
+  error?: string;
+
+  // Metadata
+  title?: string;
+  description?: string;
+  tags?: string[];
+
+  // Report summary (if completed)
+  reportSummary?: {
+    totalMessages: number;
+    topicCount: number;
+    dateRange?: {
+      start: number;
+      end: number;
+    };
+  };
 }
 
 // Report pipeline constants

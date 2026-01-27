@@ -1,94 +1,108 @@
-# Refactoring Plan: Report Storage (TRD 06)
+# Refactoring Plan: Report Management (TRD 06)
 
 ## Overview
 
-리포트 영구 저장 기능을 구현합니다. 현재 Redis 캐시에 1시간 TTL로 저장되는 리포트를 선택적으로 영구 저장할 수 있게 합니다.
+리포트 관리 기능을 추가합니다.
+
+**핵심 인사이트**: 기존 `report:job:{jobId}`는 이미 TTL 없이 영구 저장됩니다.
+별도의 "영구 저장" 레이어가 필요 없고, 기존 ReportJob에 메타데이터와 관리 기능만 추가하면 됩니다.
 
 ## Source Documents
 
-- `docs/trd/06-report-storage.md` - 리포트 영구 저장 기능
+- `docs/trd/06-report-storage.md` - 리포트 저장 기능 (일부만 적용)
 
-## Dependencies
+## 실제 필요한 기능
 
-- 기존 ReportService, Redis 인프라
-- 선행 작업 없음 (독립적으로 진행 가능)
+| 기능 | 현재 | 목표 |
+|------|------|------|
+| 영구 저장 | ✅ 이미 됨 | - |
+| jobId 조회 | ✅ 이미 됨 | - |
+| 메타데이터 (title, description, tags) | ❌ | ✅ |
+| 목록 조회 (페이지네이션) | △ 기본만 | ✅ |
+| 검색/필터링 | ❌ | ✅ |
+| 메타데이터 수정 | ❌ | ✅ |
+| 삭제 | ❌ | ✅ |
 
 ---
 
-## Phase 1: Types & Interfaces
+## Phase 1: ReportJob 타입 확장
 
-- [ ] task1 - Create `src/types/storage.ts` with StorageOptions, StoredReport, StoredReportSummary interfaces
-- [ ] task2 - Create StoredReportQuery and PaginatedResult interfaces for list queries
-- [ ] task3 - Define StorageProvider interface for storage abstraction
+- [x] task1 - `ReportJob`에 메타데이터 필드 추가 (title, description, tags)
+- [x] task2 - `ReportRequestParams`에 메타데이터 옵션 추가 (생성 시 지정 가능)
 
-## Phase 2: Storage Provider Implementation
+## Phase 2: ReportService 확장
 
-- [ ] task4 - Create `src/storage/provider.ts` with StorageProvider abstract interface
-- [ ] task5 - Implement Redis-based StorageProvider in `src/storage/redisStorageProvider.ts`
-- [ ] task6 - Add storage provider factory/initialization logic
+- [x] task3 - `getAllJobs()` 개선: 페이지네이션, 필터링, 검색 지원
+- [x] task4 - `updateJob()` 메서드 추가: 메타데이터 수정
+- [x] task5 - `deleteJob()` 메서드 추가: job 삭제
 
-## Phase 3: Report Storage Service
+## Phase 3: API 엔드포인트
 
-- [ ] task7 - Create `src/services/reportStorageService.ts` with core CRUD operations
-- [ ] task8 - Implement save() method with metadata extraction from Report
-- [ ] task9 - Implement list() method with pagination and filtering
-- [ ] task10 - Implement get(), update(), delete() methods
-- [ ] task11 - Add cache integration (Redis hot cache for stored reports)
-
-## Phase 4: ReportService Extension
-
-- [ ] task12 - Extend ReportRequestParams to include StorageOptions
-- [ ] task13 - Modify createJob() to handle persist option
-- [ ] task14 - Add persistReport() method to convert temporary to persistent
-- [ ] task15 - Integrate ReportStorageService into ReportService
-
-## Phase 5: API Endpoints
-
-- [ ] task16 - Add `storage` parameter to POST /api/reports request body
-- [ ] task17 - Create GET /api/reports/stored endpoint for list query
-- [ ] task18 - Create GET /api/reports/stored/:id endpoint for detail view
-- [ ] task19 - Create PATCH /api/reports/stored/:id endpoint for metadata update
-- [ ] task20 - Create DELETE /api/reports/stored/:id endpoint
-- [ ] task21 - Create POST /api/reports/:jobId/persist endpoint for conversion
-
-## Phase 6: Testing
-
-- [ ] task22 - Write unit tests for StorageProvider implementation
-- [ ] task23 - Write unit tests for ReportStorageService
-- [ ] task24 - Write integration tests for storage API endpoints
+- [x] task6 - `GET /api/reports` 개선: query params로 페이지네이션, 필터링, 검색
+- [x] task7 - `PATCH /api/reports/:jobId` 추가: 메타데이터 수정
+- [x] task8 - `DELETE /api/reports/:jobId` 추가: job 삭제
+- [x] task9 - `POST /api/reports` 확장: 생성 시 title, description, tags 지정
 
 ---
 
 ## Build Verification
 
-- [ ] Run TypeScript build check (`source ~/.nvm/nvm.sh && nvm use 22 && npx tsc --noEmit`)
+- [x] Run TypeScript build check (`source ~/.nvm/nvm.sh && nvm use 22 && npx tsc --noEmit`)
 
 ---
 
-## Implementation Order
+## 상세 설계
 
-1. **Phase 1** (tasks 1-3): Types & Interfaces
-2. **Phase 2** (tasks 4-6): Storage Provider
-3. **Phase 3** (tasks 7-11): Storage Service
-4. **Phase 4** (tasks 12-15): ReportService Integration
-5. **Phase 5** (tasks 16-21): API Endpoints
-6. **Phase 6** (tasks 22-24): Testing
+### ReportJob 타입 확장
 
----
+```typescript
+export interface ReportJob {
+  id: string;
+  status: ReportJobStatus;
+  progress?: ReportJobProgress;
+  report?: Report;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+  cachedAt?: number;
+  params: ReportRequestParams;
 
-## Notes
+  // 메타데이터 (신규)
+  title?: string;
+  description?: string;
+  tags?: string[];
+}
+```
 
-### Technical Decisions:
+### API 변경
 
-1. **Storage Backend**: Redis 기반 구현 (향후 PostgreSQL/S3 등으로 마이그레이션 가능)
-2. **TTL Strategy**:
-   - Temporary reports: 1 hour (기존 유지)
-   - Persistent report cache: 24 hours
+**GET /api/reports (개선)**
+```
+Query Parameters:
+- page: number (default: 1)
+- limit: number (default: 20, max: 100)
+- tags: string (comma-separated)
+- startDate: string (ISO date)
+- endDate: string (ISO date)
+- search: string (title, description 검색)
+- status: string (pending, processing, completed, failed)
+- sortBy: string (createdAt, updatedAt, title)
+- sortOrder: string (asc, desc)
+```
 
-### API Backward Compatibility:
+**PATCH /api/reports/:jobId (신규)**
+```json
+{
+  "title": "새 제목",
+  "description": "새 설명",
+  "tags": ["tag1", "tag2"]
+}
+```
 
-- `persist` 옵션은 기본 `false` (기존 워크플로우 유지)
-- 기존 `/api/reports/*` 엔드포인트 동작 변경 없음
+**DELETE /api/reports/:jobId (신규)**
+```
+Response: { success: true, message: "Job deleted" }
+```
 
 ---
 
@@ -96,10 +110,15 @@
 
 | Phase | Tasks | Estimated Hours |
 |-------|-------|-----------------|
-| 1 | Types & Interfaces | 4h |
-| 2 | Storage Provider | 4h |
-| 3 | Storage Service | 6h |
-| 4 | ReportService | 4h |
-| 5 | API Endpoints | 4h |
-| 6 | Testing | 4h |
-| **Total** | | **26h (~4 days)** |
+| 1 | 타입 확장 | 1h |
+| 2 | Service 확장 | 3h |
+| 3 | API 엔드포인트 | 2h |
+| **Total** | | **6h (~1 day)** |
+
+---
+
+## Notes
+
+- 기존 `persist` 옵션, `StorageProvider`, `StoredReport` 등은 불필요하여 제거됨
+- 기존 job 데이터는 그대로 유지되며, 새 필드는 optional로 추가
+- 하위 호환성 100% 유지

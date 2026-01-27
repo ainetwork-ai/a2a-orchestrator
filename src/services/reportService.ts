@@ -7,6 +7,9 @@ import {
   ReportJobStatus,
   ReportRequestParams,
   ReportJobProgress,
+  ReportJobQuery,
+  ReportJobSummary,
+  PaginatedResult,
   REPORT_CACHE_TTL_SECONDS,
 } from "../types/report";
 
@@ -60,6 +63,10 @@ class ReportService {
       createdAt: now,
       updatedAt: now,
       params,
+      // Metadata from params (TRD 06)
+      title: params.title,
+      description: params.description,
+      tags: params.tags,
     };
 
     this.jobs.set(jobId, job);
@@ -89,15 +96,38 @@ class ReportService {
   }
 
   /**
-   * Get all jobs (from Redis)
+   * Get all jobs (from Redis) - legacy method for backward compatibility
    */
   async getAllJobs(): Promise<ReportJob[]> {
+    const result = await this.queryJobs({});
+    // Return full jobs by fetching each one
+    const jobs: ReportJob[] = [];
+    for (const summary of result.items) {
+      const job = await this.getJob(summary.jobId);
+      if (job) jobs.push(job);
+    }
+    return jobs;
+  }
+
+  /**
+   * Query jobs with pagination, filtering, and search (TRD 06)
+   */
+  async queryJobs(query: ReportJobQuery): Promise<PaginatedResult<ReportJobSummary>> {
     try {
       const redis = getRedisClient();
       const keys = await redis.keys(`${JOB_PREFIX}*`);
 
-      if (keys.length === 0) return [];
+      if (keys.length === 0) {
+        return {
+          items: [],
+          total: 0,
+          page: query.page || 1,
+          limit: query.limit || 20,
+          hasMore: false,
+        };
+      }
 
+      // Fetch all jobs
       const jobs: ReportJob[] = [];
       for (const key of keys) {
         const data = await redis.get(key);
@@ -106,12 +136,100 @@ class ReportService {
         }
       }
 
-      // Sort by createdAt descending (newest first)
-      jobs.sort((a, b) => b.createdAt - a.createdAt);
-      return jobs;
+      // Apply filters
+      let filtered = jobs;
+
+      // Filter by status
+      if (query.status) {
+        filtered = filtered.filter((job) => job.status === query.status);
+      }
+
+      // Filter by tags
+      if (query.tags && query.tags.length > 0) {
+        filtered = filtered.filter((job) =>
+          query.tags!.some((tag) => job.tags?.includes(tag))
+        );
+      }
+
+      // Filter by date range (createdAt)
+      if (query.startDate) {
+        const startTimestamp = new Date(query.startDate).getTime();
+        filtered = filtered.filter((job) => job.createdAt >= startTimestamp);
+      }
+      if (query.endDate) {
+        const endTimestamp = new Date(query.endDate).getTime();
+        filtered = filtered.filter((job) => job.createdAt <= endTimestamp);
+      }
+
+      // Search in title and description
+      if (query.search) {
+        const searchLower = query.search.toLowerCase();
+        filtered = filtered.filter(
+          (job) =>
+            job.title?.toLowerCase().includes(searchLower) ||
+            job.description?.toLowerCase().includes(searchLower)
+        );
+      }
+
+      // Sort
+      const sortBy = query.sortBy || "createdAt";
+      const sortOrder = query.sortOrder || "desc";
+      filtered.sort((a, b) => {
+        let comparison = 0;
+        if (sortBy === "title") {
+          comparison = (a.title || "").localeCompare(b.title || "");
+        } else if (sortBy === "updatedAt") {
+          comparison = a.updatedAt - b.updatedAt;
+        } else {
+          comparison = a.createdAt - b.createdAt;
+        }
+        return sortOrder === "desc" ? -comparison : comparison;
+      });
+
+      // Pagination
+      const page = Math.max(1, query.page || 1);
+      const limit = Math.min(100, Math.max(1, query.limit || 20));
+      const total = filtered.length;
+      const startIndex = (page - 1) * limit;
+      const paginatedJobs = filtered.slice(startIndex, startIndex + limit);
+
+      // Transform to summary
+      const items: ReportJobSummary[] = paginatedJobs.map((job) => ({
+        jobId: job.id,
+        status: job.status,
+        progress: job.progress,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        cachedAt: job.cachedAt,
+        error: job.error,
+        title: job.title,
+        description: job.description,
+        tags: job.tags,
+        reportSummary: job.report
+          ? {
+              totalMessages: job.report.statistics.totalMessages,
+              topicCount: job.report.clusters.length,
+              dateRange: job.report.statistics.dateRange,
+            }
+          : undefined,
+      }));
+
+      return {
+        items,
+        total,
+        page,
+        limit,
+        hasMore: startIndex + limit < total,
+      };
     } catch (error) {
-      console.error("[ReportService] Error getting all jobs:", error);
-      return [];
+      console.error("[ReportService] Error querying jobs:", error);
+      return {
+        items: [],
+        total: 0,
+        page: query.page || 1,
+        limit: query.limit || 20,
+        hasMore: false,
+      };
     }
   }
 
@@ -145,6 +263,7 @@ class ReportService {
       job.report = report;
       job.updatedAt = Date.now();
       job.cachedAt = Date.now();
+
       await this.saveJobToRedis(job);
 
       // Save to cache
@@ -239,6 +358,77 @@ class ReportService {
     } catch (error) {
       console.error("[ReportService] Error getting job from Redis:", error);
       return null;
+    }
+  }
+
+  /**
+   * Update job metadata (title, description, tags) (TRD 06)
+   */
+  async updateJob(
+    jobId: string,
+    updates: { title?: string; description?: string; tags?: string[] }
+  ): Promise<ReportJob | null> {
+    try {
+      const job = await this.getJob(jobId);
+      if (!job) {
+        return null;
+      }
+
+      // Update metadata fields
+      if (updates.title !== undefined) {
+        job.title = updates.title;
+      }
+      if (updates.description !== undefined) {
+        job.description = updates.description;
+      }
+      if (updates.tags !== undefined) {
+        job.tags = updates.tags;
+      }
+
+      job.updatedAt = Date.now();
+
+      // Save to Redis and memory
+      await this.saveJobToRedis(job);
+      this.jobs.set(jobId, job);
+
+      console.log(`[ReportService] Job ${jobId} metadata updated`);
+      return job;
+    } catch (error) {
+      console.error("[ReportService] Error updating job:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Delete a job (TRD 06)
+   */
+  async deleteJob(jobId: string): Promise<boolean> {
+    try {
+      const redis = getRedisClient();
+
+      // Check if job exists
+      const job = await this.getJob(jobId);
+      if (!job) {
+        return false;
+      }
+
+      // Delete from Redis
+      await redis.del(`${JOB_PREFIX}${jobId}`);
+
+      // Delete from memory
+      this.jobs.delete(jobId);
+
+      // Also invalidate cache if this job was cached
+      if (job.params) {
+        const cacheKey = this.generateCacheKey(job.params);
+        await redis.del(`${CACHE_PREFIX}${cacheKey}`);
+      }
+
+      console.log(`[ReportService] Job ${jobId} deleted`);
+      return true;
+    } catch (error) {
+      console.error("[ReportService] Error deleting job:", error);
+      return false;
     }
   }
 
