@@ -20,6 +20,8 @@ This directory contains the Technical Requirements Documents for migrating the A
 
 ---
 
+## Phase 1: Core MVP
+
 ### [01. JSON API Response Structure](./01-json-api-structure.md)
 Design specification for the new T3C-style JSON response format.
 
@@ -29,55 +31,8 @@ Design specification for the new T3C-style JSON response format.
 - `VisualizationData` structure (scatter plot, tree, charts)
 - `ReportMetadata` for processing information
 - Backward compatibility strategy
-- Type definitions and implementation plan
 
-**Estimated Effort:** 3-5 days
-
-**Dependencies:** None
-
-**Critical for:** All subsequent tasks depend on this structure
-
----
-
-### [02. Visualization Data Generation](./02-visualization-data.md)
-Implementation guide for generating visualization-ready data structures.
-
-**Key Topics:**
-- New `visualizer.ts` pipeline step
-- Scatter plot generation algorithm
-  - Coordinate calculation (sentiment, time, priority)
-  - Point sizing and coloring
-  - Axis configuration
-- Topic tree generation (hierarchical structure)
-- Statistical chart data (pie, bar, line charts)
-- Performance optimization strategies
-- Integration into existing pipeline
-
-**Estimated Effort:** 4-6 days
-
-**Dependencies:** Task 01 (data structure design)
-
-**Critical for:** Interactive UI visualization features
-
----
-
-### [03. API Endpoint Updates](./03-api-endpoints.md)
-API endpoint modifications to support new JSON format with backward compatibility.
-
-**Key Topics:**
-- New `format` query parameter (json/markdown/full)
-- `includeMessages` parameter for performance optimization
-- Optional endpoints: `/topics`, `/visualization`
-- Response format specifications
-- Report transformer utility (`reportTransformer.ts`)
-- Backward compatibility strategy
-- Migration path for clients
-
-**Estimated Effort:** 2-3 days
-
-**Dependencies:** Task 01 (structure), Task 02 (visualization)
-
-**Critical for:** Frontend integration
+**Estimated Effort:** 3-5 days | **Dependencies:** None
 
 ---
 
@@ -88,60 +43,159 @@ Ensuring only valuable messages appear in report output while filtering non-subs
 - Explicit filtering in cluster output
 - Report validation utility (`reportValidator.ts`)
 - Filtering metrics in metadata
-- Enhanced categorizer logging
-- Edge case handling (all filtered, few substantive, high filtering rate)
-- Testing strategy for data quality
+- Edge case handling
 
-**Estimated Effort:** 2-3 days
-
-**Dependencies:** Task 01 (structure)
-
-**Critical for:** Data quality and user trust
+**Estimated Effort:** 2-3 days | **Dependencies:** Task 01
 
 ---
 
 ### [05. Grounded Analysis (Opinion-Quote Linking)](./05-grounded-analysis.md) 🔴 **CRITICAL**
-**⚠️ MOVED TO PHASE 1** - Originally planned for Phase 2, but this is T3C's defining feature.
-
 Link AI-generated opinions back to specific supporting messages for transparency and trust.
 
 **Key Topics:**
-- Why this is T3C's core feature (auditable, verifiable analysis)
 - LLM-based opinion → message linking
 - `Opinion` interface with `supportingMessages`, `mentionCount`
 - New pipeline step: Grounding
-- Representative quote selection
-- Confidence scoring
 - Performance optimization (< 2s per cluster)
 
-**Estimated Effort:** 5 days
-
-**Dependencies:** Task 01 (structure), Task 03 (clusterer)
-
-**Critical for:** Trust, transparency, T3C-style experience
-
-**Priority:** 🔴 **HIGH** - Without this, we have a clustering tool, not a T3C platform
+**Estimated Effort:** 5 days | **Priority:** 🔴 **HIGH**
 
 ---
+
+## Phase 2: Visualization & API
+
+### [02. Visualization Data Generation](./02-visualization-data.md)
+Implementation guide for generating visualization-ready data structures.
+
+**Key Topics:**
+- New `visualizer.ts` pipeline step
+- Scatter plot, topic tree, chart generation
+- Performance optimization strategies
+
+**Estimated Effort:** 4-6 days | **Dependencies:** Task 01
+
+---
+
+### [03. API Endpoint Updates](./03-api-endpoints.md)
+API endpoint modifications to support new JSON format with backward compatibility.
+
+**Key Topics:**
+- New `format` query parameter (json/markdown/full)
+- Optional endpoints: `/topics`, `/visualization`
+- Report transformer utility
+
+**Estimated Effort:** 2-3 days | **Dependencies:** Task 01, 02
+
+---
+
+## Phase 3: Storage & Persistence
+
+### [06. Report Storage & Persistence](./06-report-storage.md)
+리포트 영구 저장 및 히스토리 관리 기능 구현 문서.
+
+**Key Topics:**
+- 저장소 추상화 인터페이스 (StorageProvider)
+- 저장 옵션 인터페이스 (persist: true/false)
+- 저장된 리포트 조회/관리 API (/api/reports/stored/*)
+- Redis 캐시-저장소 통합 전략
+
+**Note:** 저장소 기술 (PostgreSQL, S3, GCS 등)은 구현 시 결정
+
+**Estimated Effort:** 5 days (35시간) | **Dependencies:** Task 01-05
+
+---
+
+## Phase 4: Enhanced Features
+
+### [07. Enhanced Report Metadata](./07-enhanced-metadata.md) 🟢 **NEW**
+리포트 메타데이터 확장 - 스레드별, 에이전트별, 시간대별 분석.
+
+**Key Topics:**
+- Thread-level breakdown (스레드별 메시지 분포)
+- Agent-level breakdown (에이전트별 참여도)
+- Time-period breakdown (시간대별 활동 패턴)
+- Category-specific deep analysis
+
+**Estimated Effort:** 4 days (19시간) | **Dependencies:** Task 01-06
+
+**Priority:** Medium - 99-future-decisions.md Decision #10 구현
+
+---
+
+### [08. Real-time Report Updates](./08-realtime-updates.md) 🟢 **NEW**
+SSE 기반 실시간 리포트 진행 상황 스트리밍.
+
+**Key Topics:**
+- SSE (Server-Sent Events) 스트림 엔드포인트
+- 파이프라인 단계별 진행률 이벤트
+- Heartbeat 및 연결 관리
+- 클라이언트 연동 예제
+
+**Estimated Effort:** 3 days (16시간) | **Dependencies:** Task 01-06
+
+**Priority:** Medium - 99-future-decisions.md Decision #15 구현
+
+---
+
+### [09. Public Sharing Links](./09-public-sharing.md) 🟢 **NEW**
+토큰 기반 공개 공유 링크 기능.
+
+**Key Topics:**
+- 토큰 기반 공개 링크 생성
+- 만료 시간 및 조회 제한
+- 비밀번호 보호 (선택적)
+- 접근 감사 로그
+
+**Estimated Effort:** 5 days (22시간) | **Dependencies:** Task 06 (Report Storage)
+
+**Priority:** Low - 99-future-decisions.md Decision #17 구현
+
+---
+
+## Phase 5: Quality & Reliability
+
+### [10. Error Handling & Recovery](./10-error-handling.md) 🟢 **NEW**
+견고한 에러 처리 및 복구 시스템.
+
+**Key Topics:**
+- 재시도 메커니즘 (exponential backoff)
+- 체크포인트 기반 복구
+- 에러 코드 체계화
+- 부분 결과 지원
+
+**Estimated Effort:** 4 days (20시간) | **Dependencies:** All previous tasks
+
+**Priority:** High - 시스템 안정성 핵심
+
+---
+
+### [11. Testing Strategy](./11-testing-strategy.md) 🟢 **NEW**
+포괄적인 테스팅 전략 및 인프라.
+
+**Key Topics:**
+- 단위/통합/E2E 테스트 전략
+- Mock 라이브러리 (LLM, Redis, PostgreSQL)
+- 테스트 커버리지 목표 (70%+)
+- CI/CD 통합
+
+**Estimated Effort:** 6 days (30시간) | **Dependencies:** All previous tasks
+
+**Priority:** High - 품질 보증 필수
+
+---
+
+## Future Planning
 
 ### [99. Future Decisions & Deferred Features](./99-future-decisions.md)
 Tracking decisions deferred to future phases and features out of scope.
 
 **Key Topics:**
-- Deferred decisions (10-17 from original analysis)
-  - Metadata in reports
-  - Anonymization levels
-  - Pipeline restructure
-  - Grounded analysis (quote linking)
-  - Granular API endpoints
-  - Real-time updates
-  - Report storage strategy
-  - Public sharing links
-- Out of scope features
-- Decision-making process
-- Review schedule and priorities
-
-**Purpose:** Long-term planning and decision tracking
+- ~~Decision #10: Metadata in reports~~ → **Task 07로 이동**
+- Decision #11: Anonymization levels
+- Decision #12: Pipeline restructure
+- ~~Decision #15: Real-time updates~~ → **Task 08로 이동**
+- ~~Decision #16: Report storage~~ → **Task 06으로 이동**
+- ~~Decision #17: Public sharing~~ → **Task 09로 이동**
 
 **Status:** Living document - to be reviewed quarterly
 
@@ -149,79 +203,35 @@ Tracking decisions deferred to future phases and features out of scope.
 
 ## Implementation Roadmap
 
-### Phase 1: Foundation (Tasks 01 + 04 + 05) 🔴 **UPDATED**
+### Phase 1: Foundation (Tasks 01 + 04 + 05) 🔴 CRITICAL
 **Duration:** 10-15 days
 
-1. Define TypeScript interfaces for new data structures
-2. Implement validation utilities
-3. Ensure message filtering is correct
-4. **Implement grounded analysis (opinion-quote linking)** ← **NEW**
+### Phase 2: Visualization & API (Tasks 02 + 03)
+**Duration:** 6-9 days
 
-**Deliverables:**
-- Updated `src/types/report.ts` with new interfaces
-- `src/utils/reportValidator.ts` for validation
-- `src/services/reportPipeline/grounding.ts` for opinion linking ← **NEW**
-- Tests for type validation, filtering, and grounding
+### Phase 3: Storage (Task 06)
+**Duration:** 5 days
 
----
+### Phase 4: Enhanced Features (Tasks 07 + 08 + 09)
+**Duration:** 12 days
 
-### Phase 2: Visualization (Task 02)
-**Duration:** 4-6 days
-
-1. Implement `src/services/reportPipeline/visualizer.ts`
-2. Integrate into existing pipeline
-3. Generate scatter plot, tree, and chart data
-
-**Deliverables:**
-- Visualization data generator
-- Updated pipeline with new step
-- Tests for visualization generation
-
----
-
-### Phase 3: API Integration (Task 03)
-**Duration:** 2-3 days
-
-1. Update `src/routes/reports.ts` with format parameter
-2. Create `src/utils/reportTransformer.ts`
-3. Implement optional endpoints
-
-**Deliverables:**
-- Updated API endpoints
-- Transformer utility
-- API integration tests
-- Updated API documentation
-
----
-
-### Phase 4: Testing & Validation
-**Duration:** 2-3 days
-
-1. Comprehensive integration testing
-2. Performance testing
-3. Data quality validation
-4. Frontend integration testing
-
-**Deliverables:**
-- Full test suite
-- Performance benchmarks
-- Validation reports
-- Bug fixes
+### Phase 5: Quality (Tasks 10 + 11)
+**Duration:** 10 days
 
 ---
 
 ## Total Estimated Timeline
 
-**Phase 1 (Updated):** 10-15 days
-**Phase 2:** 4-6 days
-**Phase 3:** 2-3 days
-**Phase 4:** 2-3 days
+| Phase | Duration | Tasks |
+|-------|----------|-------|
+| Phase 1 | 10-15 days | 01, 04, 05 |
+| Phase 2 | 6-9 days | 02, 03 |
+| Phase 3 | 5 days | 06 |
+| Phase 4 | 12 days | 07, 08, 09 |
+| Phase 5 | 10 days | 10, 11 |
+| **Total** | **43-51 days** | 11 Tasks |
 
-**Best Case:** 18-27 days (sequential execution)
-
-**Realistic:** 4-5 weeks (accounting for reviews, testing, iterations, grounded analysis)
-
-**Note:** This document focuses on **what** and **how**, not **when**. Actual scheduling should consider team capacity, priorities, and dependencies.
+**Realistic:** 8-10 weeks (accounting for reviews, testing, iterations)
 
 ---
 
@@ -229,41 +239,88 @@ Tracking decisions deferred to future phases and features out of scope.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| **Output Format** | JSON API only (Option B) | Frontend handles rendering, backend provides data |
-| **Visualization** | Required | Essential for T3C-style interactive UI |
-| **Hierarchy** | Evaluate current structure | Check if 1-level topics work or need subclusters |
-| **Message Inclusion** | All substantive messages | But filter non-valuable content (greetings, chitchat) |
-| **Grounded Analysis** | Deferred to next phase | Opinion → quote mapping is future work |
-| **Interactive Features** | Frontend implementation | Filtering, search, navigation in frontend |
-| **Backward Compatibility** | Maintained | Markdown endpoint continues working |
+| **Output Format** | JSON API only | Frontend handles rendering |
+| **Visualization** | Required | Essential for T3C-style UI |
+| **Grounded Analysis** | Phase 1 | Core T3C feature |
+| **Storage** | Abstracted Provider + Redis | Hybrid hot/cold storage (기술 구현 시 결정) |
+| **Real-time** | SSE | Simpler than WebSocket |
+| **Sharing** | Token-based | Security with flexibility |
+| **Error Handling** | Checkpoint + Retry | Robust recovery |
 
 ---
 
 ## Success Metrics
 
 ### Functional Requirements
-- ✅ JSON API returns structured data suitable for T3C-style UI
-- ✅ All substantive messages included, non-substantive filtered
-- ✅ Visualization data enables scatter plots, trees, charts
-- ✅ Backward compatibility maintained (Markdown endpoint works)
+- JSON API returns structured data suitable for T3C-style UI
+- All substantive messages included, non-substantive filtered
+- Visualization data enables interactive features
+- Grounded opinions link to supporting quotes
+- Reports can be stored persistently
+- Real-time progress streaming available
 
 ### Performance Requirements
-- ✅ API response time < 2 seconds for cached reports
-- ✅ Visualization generation < 500ms
-- ✅ Pipeline overhead < 10% increase
+- API response time < 2 seconds for cached reports
+- Visualization generation < 500ms
+- Pipeline overhead < 10% increase
+- SSE latency < 100ms
 
 ### Quality Requirements
-- ✅ 100% of output messages are substantive (validated)
-- ✅ All tests passing (unit, integration, performance)
-- ✅ No regressions in existing functionality
-- ✅ API documentation complete and accurate
+- Test coverage 70%+ overall, 80%+ for critical modules
+- All tests passing (unit, integration, E2E)
+- Error recovery success rate > 95%
+- No regressions in existing functionality
+
+---
+
+## Document Status
+
+| Document | Status | Phase |
+|----------|--------|-------|
+| 00-overview.md | Complete | - |
+| 01-json-api-structure.md | Complete | 1 |
+| 02-visualization-data.md | Complete | 2 |
+| 03-api-endpoints.md | Complete | 2 |
+| 04-message-filtering.md | Complete | 1 |
+| 05-grounded-analysis.md | Complete 🔴 | 1 |
+| 06-report-storage.md | Complete (v2.1) | 3 |
+| 07-enhanced-metadata.md | **NEW** 🟢 | 4 |
+| 08-realtime-updates.md | **NEW** 🟢 | 4 |
+| 09-public-sharing.md | **NEW** 🟢 | 4 |
+| 10-error-handling.md | **NEW** 🟢 | 5 |
+| 11-testing-strategy.md | **NEW** 🟢 | 5 |
+| 99-future-decisions.md | Living Doc | - |
+| CHANGELOG.md | Updated | - |
+
+**Total: 13 documents (11 implementation tasks + 2 reference documents)**
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2026-01-26 | Initial TRD documents (00-05, 99) |
+| 1.1 | 2026-01-26 | Added Task 05 (grounded analysis) to Phase 1 |
+| 1.2 | 2026-01-27 | Added Task 06 (report storage) |
+| **2.0** | **2026-01-27** | **Added Tasks 07-11 (metadata, realtime, sharing, error handling, testing)** |
+
+---
+
+## Getting Started
+
+1. **Read the Overview** ([00-overview.md](./00-overview.md)) to understand project scope
+2. **Review Phase 1 Tasks** (01, 04, 05) for core implementation
+3. **Follow Implementation Roadmap** sequentially
+4. **Run Tests** after each phase completion
+5. **Update Documentation** as you implement
 
 ---
 
 ## Related Resources
 
 ### Code References
-- [Current Report Service](../../src/services/reportService.ts)
+- [Report Service](../../src/services/reportService.ts)
 - [Report Pipeline](../../src/services/reportPipeline/index.ts)
 - [Report Types](../../src/types/report.ts)
 - [Report Routes](../../src/routes/reports.ts)
@@ -271,56 +328,4 @@ Tracking decisions deferred to future phases and features out of scope.
 ### External References
 - [Talk to the City](https://talktothe.city/)
 - [T3C GitHub (tttc-light-js)](https://github.com/AIObjectives/tttc-light-js)
-- [T3C Report Example](https://talktothe.city/report/HAcEAQ3bTfXlWhtCXHa7)
-- [AI Objectives Institute](https://ai.objectives.institute/talk-to-the-city)
-
-### Design References
-- [D3.js Visualization Gallery](https://observablehq.com/@d3/gallery)
-- [REST API Best Practices](https://restfulapi.net/)
-- [Data Quality Standards](https://www.dataqualitypro.com/)
-
----
-
-## Getting Started
-
-1. **Read the Overview** ([00-overview.md](./00-overview.md)) to understand project scope
-2. **Review Task Documents** in order (01 → 02 → 03 → 04)
-3. **Start with Phase 1** (Foundation) - Tasks 01 and 04
-4. **Follow Implementation Roadmap** sequentially
-5. **Run Tests** after each phase completion
-6. **Update Documentation** as you implement
-
----
-
-## Questions or Feedback?
-
-For questions about these TRDs or implementation details, please refer to:
-- Task-specific "References" sections
-- Code comments in related source files
-- Project README for general information
-
----
-
-## Version History
-
-| Version | Date | Author | Changes |
-|---------|------|--------|---------|
-| 1.0 | 2026-01-26 | Initial | All TRD documents created |
-
----
-
-## Document Status
-
-- [x] 00-overview.md - Complete
-- [x] 01-json-api-structure.md - Complete
-- [x] 02-visualization-data.md - Complete
-- [x] 03-api-endpoints.md - Complete
-- [x] 04-message-filtering.md - Complete
-- [x] 05-grounded-analysis.md - **Complete (NEW - Phase 1 Critical)** 🔴
-- [x] 99-future-decisions.md - Complete (Living document)
-
-**Status:** All core implementation documents finalized and ready for implementation.
-
-**Important Update:** Task 05 (Grounded Analysis) was added to Phase 1 based on T3C comparison analysis. This is a critical feature for delivering true T3C-style experience.
-
-**Note:** Document 99 (Future Decisions) is a living document that will be updated as decisions are made and priorities change.
+- [Jest Documentation](https://jestjs.io/)

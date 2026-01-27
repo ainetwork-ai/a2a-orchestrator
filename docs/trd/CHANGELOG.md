@@ -1,5 +1,286 @@
 # TRD Changelog
 
+## 2026-01-27 - Task 06 Rewrite (Version 2.1)
+
+### Task 06: Report Storage & Persistence - Redesigned
+
+**변경 사유:**
+- 기존 버전이 PostgreSQL을 특정 기술로 확정
+- 요구사항은 저장소 기술을 구현 시 결정하도록 열어둘 것을 요구
+
+**주요 변경 사항:**
+
+1. **저장소 기술 비종속 설계**
+   - Before: PostgreSQL + Redis hybrid
+   - After: `StorageProvider` 인터페이스 추상화 + Redis cache
+
+2. **구현 세부사항 제거**
+   - 데이터베이스 스키마 제거
+   - 압축 알고리즘 세부사항 제거
+   - 특정 라이브러리 의존성 제거
+
+3. **인터페이스 중심 설계**
+   ```typescript
+   interface StorageProvider {
+     save(report, options): Promise<StoredReport>;
+     get(id): Promise<StoredReport | null>;
+     list(query): Promise<PaginatedResult<StoredReportSummary>>;
+     update(id, updates): Promise<StoredReport>;
+     delete(id): Promise<void>;
+     cleanupExpired(): Promise<number>;
+   }
+   ```
+
+4. **유지된 요구사항**
+   - `persist` 파라미터로 저장 여부 선택
+   - `/api/reports/stored/*` API 엔드포인트
+   - Redis 캐시 통합 전략
+   - 페이지네이션, 필터링, 검색 기능
+
+**영향:**
+- 구현 시 저장소 기술 선택 유연성 확보
+- 요구사항 문서와 구현 세부사항 분리
+
+---
+
+## 2026-01-27 - Major Update: Tasks 07-11 Added (Version 2.0)
+
+### New Documents
+
+#### Task 07: Enhanced Report Metadata
+**Status:** Phase 4
+
+**Problem Addressed:**
+- 현재 메타데이터는 기본 처리 정보만 포함
+- 스레드별, 에이전트별, 시간대별 분석 없음
+- 카테고리 심층 분석 불가
+
+**Solution:**
+- Thread-level breakdown (스레드별 메시지 분포, 활성 기간)
+- Agent-level breakdown (에이전트별 참여도, 응답 패턴)
+- Time-period breakdown (시간대별 활동, 피크 시간)
+- Category deep analysis (카테고리별 상세 인사이트)
+
+**Key Features:**
+- `MetadataLevel`: basic, detailed, full
+- API 요청 시 메타데이터 레벨 선택 가능
+- 성능 영향 최소화 (lazy loading)
+
+**Estimated Effort:** 4 days (19시간)
+
+**Related Decision:** 99-future-decisions.md Decision #10
+
+---
+
+#### Task 08: Real-time Report Updates (SSE)
+**Status:** Phase 4
+
+**Problem Addressed:**
+- 현재 폴링 방식만 지원 (1초마다 요청)
+- 대규모 리포트 생성 시 UX 저하
+- 불필요한 서버 부하
+
+**Solution:**
+- Server-Sent Events (SSE) 기반 실시간 스트리밍
+- 파이프라인 단계별 진행률 이벤트
+- Heartbeat 연결 유지
+- 완료 시 결과 데이터 포함 옵션
+
+**Key Features:**
+- `GET /api/reports/:jobId/stream` 엔드포인트
+- 이벤트 타입: status, progress, error, complete, heartbeat
+- 연결 타임아웃 및 복구 지원
+- 기존 폴링 방식 병행 지원
+
+**Estimated Effort:** 3 days (16시간)
+
+**Related Decision:** 99-future-decisions.md Decision #15
+
+---
+
+#### Task 09: Public Sharing Links
+**Status:** Phase 4
+
+**Problem Addressed:**
+- 외부 이해관계자와 리포트 공유 불가
+- 공유 시 보안 통제 없음
+- 접근 추적 불가
+
+**Solution:**
+- 토큰 기반 공개 링크 생성
+- 만료 시간 및 조회 횟수 제한
+- 비밀번호 보호 (선택적)
+- 접근 감사 로그
+
+**Key Features:**
+- `POST /api/reports/stored/:id/share` - 공개 링크 생성
+- `GET /public/reports/:token` - 공개 접근
+- 32바이트 URL-safe 토큰
+- Rate limiting 적용
+
+**Estimated Effort:** 5 days (22시간)
+
+**Related Decision:** 99-future-decisions.md Decision #17
+
+**Dependencies:** Task 06 (Report Storage)
+
+---
+
+#### Task 10: Error Handling & Recovery
+**Status:** Phase 5
+
+**Problem Addressed:**
+- 에러 발생 시 전체 작업 실패
+- 부분 복구 메커니즘 없음
+- 재시도 로직 없음
+- 에러 정보 부족
+
+**Solution:**
+- 재시도 메커니즘 (exponential backoff)
+- 체크포인트 기반 복구
+- 표준화된 에러 코드 체계
+- 부분 결과 지원
+
+**Key Features:**
+- `ErrorCode` enum (LLM_TIMEOUT, REDIS_CONNECTION 등)
+- `PipelineError` 클래스 (코드, 심각도, 재시도 가능 여부)
+- `CheckpointManager` (중간 결과 저장/복구)
+- `RetryExecutor` (exponential backoff with jitter)
+
+**Estimated Effort:** 4 days (20시간)
+
+**Priority:** High - 시스템 안정성 핵심
+
+---
+
+#### Task 11: Testing Strategy
+**Status:** Phase 5
+
+**Problem Addressed:**
+- 테스트 부재로 회귀 버그 위험
+- 수동 테스트 의존
+- LLM 의존성으로 비결정적 테스트
+- 데이터 품질 검증 없음
+
+**Solution:**
+- 포괄적 테스트 전략 (단위/통합/E2E)
+- Mock 라이브러리 (LLM, Redis, PostgreSQL)
+- 테스트 헬퍼 및 팩토리
+- CI/CD 통합
+
+**Key Features:**
+- Jest 기반 테스트 인프라
+- 커버리지 목표: 70% 전체, 80% 핵심 모듈
+- LLM Mock으로 결정적 테스트
+- GitHub Actions CI 워크플로우
+
+**Estimated Effort:** 6 days (30시간)
+
+**Priority:** High - 품질 보증 필수
+
+---
+
+### Timeline Impact
+
+**Before:**
+- Phase 1-5: 23-32 days (5-6 weeks)
+
+**After:**
+- Phase 1-5: 43-51 days (8-10 weeks)
+- +5 new tasks (Tasks 07-11)
+- +107 hours of work
+
+---
+
+### Updated Phase Structure
+
+| Phase | Tasks | Duration | Description |
+|-------|-------|----------|-------------|
+| 1 | 01, 04, 05 | 10-15 days | Core MVP (JSON, Filtering, Grounding) |
+| 2 | 02, 03 | 6-9 days | Visualization & API |
+| 3 | 06 | 5 days | Storage & Persistence |
+| 4 | 07, 08, 09 | 12 days | Enhanced Features |
+| 5 | 10, 11 | 10 days | Quality & Reliability |
+
+---
+
+### 99-future-decisions.md Updates
+
+**Decisions Moved to TRD:**
+- Decision #10 (Metadata) → **Task 07**
+- Decision #15 (Real-time) → **Task 08**
+- Decision #17 (Public Sharing) → **Task 09**
+
+**Remaining Deferred Decisions:**
+- Decision #11: Anonymization levels
+- Decision #12: Pipeline restructure
+
+---
+
+## 2026-01-27 - Report Storage & Persistence (Task 06)
+
+### New Document
+
+#### Task 06 Added: Report Storage & Persistence
+**Status:** Phase 3
+
+**Problem Addressed:**
+- 현재 리포트는 Redis 기반 임시 캐싱만 지원 (1시간 TTL)
+- 1시간 후 자동 삭제되어 히스토리 관리 불가
+- 동일 데이터 반복 분석으로 비용/시간 낭비
+- Redis 재시작 시 모든 리포트 소실
+
+**Solution:**
+- PostgreSQL 기반 영구 저장소 추가
+- `persist` 옵션으로 저장 방식 선택 (임시 vs 영구)
+- 리포트 히스토리 조회/관리 API
+- Redis-PostgreSQL 캐시 레이어 통합
+- 자동 만료 및 정리 정책
+
+**Key Features:**
+1. **저장 옵션 인터페이스**
+   ```typescript
+   interface StorageOptions {
+     persist?: boolean;
+     title?: string;
+     description?: string;
+     tags?: string[];
+     expiresAt?: number;
+     compress?: boolean;
+   }
+   ```
+
+2. **새로운 API 엔드포인트**
+   - `GET /api/reports/stored` - 저장된 리포트 목록
+   - `GET /api/reports/stored/:id` - 저장된 리포트 상세
+   - `PATCH /api/reports/stored/:id` - 메타데이터 수정
+   - `DELETE /api/reports/stored/:id` - 리포트 삭제
+   - `POST /api/reports/:jobId/archive` - 기존 리포트 아카이브
+
+3. **PostgreSQL 스키마**
+   - `reports` 테이블 (id, job_id, title, tags, params, report_data...)
+   - 인덱스 (created_at, tags, expires_at)
+   - Soft delete 지원
+
+4. **성능 최적화**
+   - 2MB 이상 리포트 자동 압축 (gzip)
+   - 영구 리포트 캐시 TTL: 24시간
+   - 페이지네이션 지원
+
+**Impact:**
+- **Timeline:** +5 days (Phase 3 추가)
+- **New Dependencies:** PostgreSQL (pg), zlib
+- **Files to Create:**
+  - `src/types/storage.ts`
+  - `src/repositories/reportRepository.ts`
+  - `src/routes/storedReports.ts` (or extend reports.ts)
+  - `migrations/001_create_reports_table.sql`
+
+**Related Decision:**
+- 99-future-decisions.md Decision #16 (Report Storage) 구현
+
+---
+
 ## 2026-01-26 - T3C Comparison Update
 
 ### Critical Changes
@@ -53,7 +334,7 @@
 3. **Data Structure Updates:**
    ```typescript
    interface Opinion {
-     supportingMessages: string[]; // Uncommented and implemented
+     supportingMessages: string[];
      mentionCount: number;
      representativeQuote?: string;
      confidence?: number;
@@ -68,161 +349,44 @@
 
 ---
 
-### Comparison Analysis Results
-
-#### ✅ What We Covered Well
-1. JSON API structure (comprehensive type definitions)
-2. Visualization data (scatter plot, tree, charts)
-3. Message filtering (substantive vs non-substantive)
-4. Sentiment analysis (nuanced with "mixed" support)
-5. Anonymization (full PII removal)
-6. Preserving diversity (consensus vs conflicting opinions)
-
-#### ⚠️ What Needs Attention
-1. **Grounded analysis** → Now Phase 1 ✅
-2. **Hierarchical subclustering** → Still evaluating (Decision #3, #4)
-3. **Message count per opinion** → Now Phase 1 ✅
-4. **Navigation patterns** → Deferred to frontend
-5. **Confidence scores** → Optional in Phase 1, recommended
-
-#### 🔴 What's Still Missing (Future Phases)
-1. Quote highlighting with context
-2. Cross-topic connections
-3. Participant diversity metrics (challenging with full anonymization)
-4. Report versioning/iteration
-5. Human review workflow
-
----
-
-### Timeline Impact
-
-**Original Plan:**
-- Phase 1: 5-8 days (Tasks 01 + 04)
-- Phase 2: 4-6 days (Tasks 02)
-- Phase 3: 2-3 days (Tasks 03)
-- Total: 13-20 days (3-4 weeks)
-
-**Updated Plan:**
-- Phase 1: 10-15 days (Tasks 01 + 04 + **05**) ← +5 days
-- Phase 2: 4-6 days (Task 02)
-- Phase 3: 2-3 days (Task 03)
-- Phase 4: 2-3 days (Testing)
-- Total: 18-27 days (4-5 weeks)
-
----
-
-### Recommendations Implemented
-
-From T3C comparison analysis:
-
-1. ✅ **Moved grounded analysis to Phase 1**
-   - Opinion interface enhanced with supportingMessages
-   - New grounding.ts pipeline step
-   - LLM-based implementation approach
-
-2. ✅ **Added message count tracking**
-   - Part of Opinion interface (mentionCount)
-   - Shows which opinions are widely held
-
-3. ⏸️ **Hierarchical subclustering** (Still evaluating)
-   - Topic interface supports it (parentId, level)
-   - Marked for evaluation in Phase 2
-   - Decision #3, #4 in 99-future-decisions.md
-
-4. ⏸️ **Confidence scores** (Optional Phase 1)
-   - Added to Opinion interface as optional
-   - Can be implemented if time permits
-
----
-
-### Recommendations Deferred
-
-From T3C comparison analysis:
-
-1. **Human Review Workflow**
-   - Out of scope for Phase 1-3
-   - Added to 99-future-decisions.md
-   - Requires separate product decision
-
-2. **Cross-Topic Connections**
-   - Phase 3 or later
-   - Would add relatedTopicIds to Topic interface
-
-3. **Enhanced Context** (previousMessage, nextMessage)
-   - Phase 3 or later
-   - Helps with conversation flow
-
-4. **Temporal Analysis**
-   - Phase 3 or later
-   - How opinions evolved over time
-
----
-
-### Document Status
-
-**Before Update:**
-- 6 documents (00-04, 99, README)
-- Phase 1: 2 tasks
-- Timeline: 3-4 weeks
-
-**After Update:**
-- **7 documents** (00-05, 99, README, CHANGELOG)
-- Phase 1: **3 tasks** (added grounded analysis)
-- Timeline: **4-5 weeks**
-- **Critical T3C feature now included**
-
----
-
-### Key Takeaways
-
-1. **Grounded analysis is not optional** for T3C-style experience
-   - It's the difference between "clustering tool" and "deliberation platform"
-   - Users need to verify AI claims against actual quotes
-
-2. **Data structures were well-prepared**
-   - Opinion interface had commented-out fields ready
-   - Just needed prioritization decision
-
-3. **Implementation is straightforward**
-   - LLM-based approach is simpler than embedding
-   - Pipeline is extensible (easy to add step)
-   - Performance impact is acceptable (~30%)
-
-4. **Timeline increase is justified**
-   - +5 days for critical feature
-   - Still delivers in 4-5 weeks
-   - MVP will have true T3C-style transparency
-
----
-
-### Next Steps
-
-1. **Review this changelog** with team
-2. **Approve Phase 1 scope change** (add Task 05)
-3. **Begin implementation** with updated plan:
-   - Week 1-2: Tasks 01, 04, 05 (foundation + grounding)
-   - Week 3: Task 02 (visualization)
-   - Week 4: Task 03 (API)
-   - Week 5: Testing & polish
-
-4. **Re-evaluate subclustering** after Phase 1
-   - Decision #3, #4 in 99-future-decisions.md
-   - Based on initial report quality
-
----
-
 ## Version History
 
 | Version | Date | Changes | Author |
 |---------|------|---------|--------|
 | 1.0 | 2026-01-26 | Initial TRD documents (00-04, 99) | - |
 | 1.1 | 2026-01-26 | Added Task 05 (grounded analysis), updated timeline | - |
+| 1.2 | 2026-01-27 | Added Task 06 (report storage), Phase 3 추가 | Claude |
+| 2.0 | 2026-01-27 | Added Tasks 07-11 (metadata, realtime, sharing, error handling, testing), Phase 4-5 추가 | Claude |
+| **2.1** | **2026-01-27** | **Task 06 재작성: 저장소 기술 비종속, 인터페이스 중심 설계** | Claude |
+
+---
+
+## Summary of All TRD Documents
+
+| Task | Title | Phase | Effort | Status |
+|------|-------|-------|--------|--------|
+| 00 | Overview | - | - | Complete |
+| 01 | JSON API Structure | 1 | 3-5 days | Complete |
+| 02 | Visualization Data | 2 | 4-6 days | Complete |
+| 03 | API Endpoints | 2 | 2-3 days | Complete |
+| 04 | Message Filtering | 1 | 2-3 days | Complete |
+| 05 | Grounded Analysis | 1 | 5 days | Complete 🔴 |
+| 06 | Report Storage | 3 | 5 days | Complete (v2.1 - 기술 비종속) |
+| 07 | Enhanced Metadata | 4 | 4 days | **NEW** 🟢 |
+| 08 | Real-time Updates | 4 | 3 days | **NEW** 🟢 |
+| 09 | Public Sharing | 4 | 5 days | **NEW** 🟢 |
+| 10 | Error Handling | 5 | 4 days | **NEW** 🟢 |
+| 11 | Testing Strategy | 5 | 6 days | **NEW** 🟢 |
+| 99 | Future Decisions | - | - | Living Doc |
+
+**Total Implementation Tasks:** 11
+**Total Estimated Effort:** 43-51 days
+**Total Documents:** 13
 
 ---
 
 ## Related Documents
 
-- [00-overview.md](./00-overview.md) - Updated with new Phase 1 tasks
-- [05-grounded-analysis.md](./05-grounded-analysis.md) - New document (critical)
-- [99-future-decisions.md](./99-future-decisions.md) - Updated Decision #13
-- [README.md](./README.md) - Updated roadmap and timeline
+- [00-overview.md](./00-overview.md) - Project overview
+- [README.md](./README.md) - Document index and roadmap
+- [99-future-decisions.md](./99-future-decisions.md) - Deferred decisions tracker

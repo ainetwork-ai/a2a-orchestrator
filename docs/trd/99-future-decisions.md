@@ -20,29 +20,20 @@ These decisions are intentionally left open and will be addressed in future iter
 
 **Question:** What metadata should be included in the report?
 
-**Options:**
-- [ ] Thread-level breakdown (Thread #123: 5 messages)
-- [ ] Agent-level breakdown (Agent "MedicalBot": 20 messages)
-- [ ] Time-period breakdown (Week 1: 50 messages, Week 2: 30 messages)
-- [ ] Per-message timestamps in detail view
-- [ ] Category-specific deep analysis
+**Status:** ✅ **MOVED TO PHASE 4 - Task 07**
 
-**Current Decision:** Deferred
+**Update (2026-01-27):** This feature has been fully designed and documented.
 
-**Rationale:**
-- Need to understand frontend requirements first
-- Depends on what insights users actually need
-- May impact performance if too much metadata
+**See:** [Task 07: Enhanced Report Metadata](./07-enhanced-metadata.md) for full implementation plan
 
-**When to Revisit:** After Phase 1-3 completion and initial user testing
+**Key Features Designed:**
+- Thread-level breakdown (스레드별 메시지 분포, 활성 기간)
+- Agent-level breakdown (에이전트별 참여도, 응답 패턴)
+- Time-period breakdown (시간대별 활동 패턴, 피크 시간)
+- Category deep analysis (카테고리별 상세 인사이트)
+- `MetadataLevel` 옵션: basic, detailed, full
 
-**Impact:**
-- Low - Can add incrementally without breaking changes
-- Metadata can be added to existing structures
-
-**Related Code:**
-- `src/types/report.ts` - ReportMetadata interface
-- `src/services/reportPipeline/analyzer.ts`
+**Estimated Effort:** 4 days (19시간)
 
 ---
 
@@ -206,47 +197,25 @@ interface Opinion {
 
 **Question:** Should report generation status stream in real-time?
 
-**Options:**
-- **WebSocket/SSE**: Real-time progress streaming
-- **Polling** (current): Frontend polls for status
-- **Completion only**: Only accessible when done
+**Status:** ✅ **MOVED TO PHASE 4 - Task 08**
 
-**Current Decision:** Keep polling (current approach)
+**Update (2026-01-27):** This feature has been fully designed and documented.
 
-**Rationale:**
-- Polling works for current use case
-- Less complex than WebSocket infrastructure
-- Reports complete quickly (< 10 seconds typically)
+**See:** [Task 08: Real-time Report Updates](./08-realtime-updates.md) for full implementation plan
 
-**When to Revisit:** If reports start taking >30 seconds or user feedback requests it
+**Chosen Approach:** Server-Sent Events (SSE)
+- `GET /api/reports/:jobId/stream` 엔드포인트
+- 파이프라인 단계별 진행률 이벤트
+- Heartbeat 연결 유지
+- 완료 시 결과 데이터 포함 옵션
 
-**Impact:**
-- Medium - Infrastructure change required
-- Better UX for long-running reports
+**Key Features Designed:**
+- SSEManager 클래스 (연결 관리, 정리)
+- 이벤트 타입: status, progress, error, complete, heartbeat
+- 연결 타임아웃 및 복구 지원
+- 기존 폴링 방식 병행 지원
 
-**Related Code:**
-- `src/routes/reports.ts` - GET /:jobId endpoint
-- Thread system already has SSE: `src/routes/threads.ts`
-
-**Implementation Path (if needed):**
-```typescript
-// Example SSE endpoint
-router.get("/:jobId/stream", async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  const interval = setInterval(async () => {
-    const job = await reportService.getJob(req.params.jobId);
-    res.write(`data: ${JSON.stringify(job.progress)}\n\n`);
-
-    if (job.status === "completed" || job.status === "failed") {
-      clearInterval(interval);
-      res.end();
-    }
-  }, 1000);
-});
-```
+**Estimated Effort:** 3 days (16시간)
 
 ---
 
@@ -259,40 +228,33 @@ router.get("/:jobId/stream", async (req, res) => {
 - **Persistent**: Permanent storage (S3, GCS, or database)
 - **Configurable**: Optional permanent storage for important reports
 
-**Current Decision:** Keep temporary (current approach)
+**Current Decision:** ✅ **MOVED TO PHASE 3 - Task 06**
 
-**Rationale:**
-- Reports can be regenerated if needed
-- Reduces storage costs
-- Most use cases don't need long-term storage
+**Update (2026-01-27):** Report storage feature has been redesigned with storage-agnostic approach in [Task 06: Report Storage & Persistence](./06-report-storage.md).
 
-**When to Revisit:** If users request report history or archival
+**Chosen Approach:** Abstracted Storage Provider + Redis
+- Redis: Hot cache (1hr TTL for temporary, 24hr for persistent)
+- Storage Provider: 추상화된 인터페이스 (구현 기술은 구현 시 결정)
+  - Options: PostgreSQL, MongoDB, S3, GCS, etc.
+- Configurable via `persist` option
 
-**Impact:**
-- Medium - Requires storage infrastructure
-- Adds complexity for cleanup and management
+**Key Features Designed:**
+- `POST /api/reports` with `storage.persist: true` option
+- `GET /api/reports/stored` - History/list API
+- `StorageProvider` interface for technology-agnostic implementation
+- Redis cache integration strategy
+
+**See:** [06-report-storage.md](./06-report-storage.md) for interface specifications
+
+**Note:** 저장소 기술 선택 (PostgreSQL, S3 등)은 구현 시 결정
+
+**Estimated Effort:** 5 days (Phase 3)
 
 **Related Code:**
-- `src/services/reportService.ts` - Cache management
-- `src/types/report.ts` - REPORT_CACHE_TTL_SECONDS
-
-**Implementation Notes:**
-```typescript
-// Future: Optional persistent storage
-interface ReportRequestParams {
-  // ... existing params ...
-
-  // FUTURE: Storage options
-  persist?: boolean; // Save permanently
-  expiresAt?: number; // Custom expiration
-  tags?: string[]; // For organization
-}
-```
-
-**Storage Considerations:**
-- Cost: Large reports can be 1-5MB each
-- Cleanup: Need garbage collection strategy
-- Access control: Who can view archived reports?
+- `src/services/reportService.ts` - To be extended
+- `src/services/reportStorageService.ts` - New file
+- `src/storage/provider.ts` - New file (interface)
+- `src/types/storage.ts` - New file
 
 ---
 
@@ -300,53 +262,27 @@ interface ReportRequestParams {
 
 **Question:** Should reports be shareable via public links?
 
-**Options:**
-- **Public links**: `https://domain.com/reports/public/abc123`
-- **Internal only** (current): Authentication required
-- **Conditional**: Optional public sharing with token
+**Status:** ✅ **MOVED TO PHASE 4 - Task 09**
 
-**Current Decision:** Internal only (current approach)
+**Update (2026-01-27):** This feature has been fully designed and documented.
 
-**Rationale:**
-- Security concerns with public data
-- Anonymization may not be sufficient for all data
-- Need access control design first
+**See:** [Task 09: Public Sharing Links](./09-public-sharing.md) for full implementation plan
 
-**When to Revisit:** After security review and user requirements
+**Chosen Approach:** Token-based public sharing
+- 32바이트 URL-safe 토큰
+- 만료 시간 및 조회 횟수 제한
+- 비밀번호 보호 (선택적)
+- 접근 감사 로그
 
-**Impact:**
-- High - Security and privacy implications
-- Requires authentication/authorization system
+**Key Features Designed:**
+- `POST /api/reports/stored/:id/share` - 공개 링크 생성
+- `GET /public/reports/:token` - 공개 접근
+- ShareRepository 및 ShareService
+- Rate limiting 적용
 
-**Related Code:**
-- `src/routes/reports.ts`
-- New file: `src/middleware/publicReportAuth.ts` (to be created)
+**Estimated Effort:** 5 days (22시간)
 
-**Security Requirements:**
-- Token-based access control
-- Expiration for public links
-- Audit logging for public access
-- Rate limiting
-
-**Implementation Notes:**
-```typescript
-// Future: Public sharing
-interface ReportJob {
-  // ... existing fields ...
-
-  // FUTURE: Public sharing
-  isPublic?: boolean;
-  publicToken?: string;
-  publicExpiresAt?: number;
-  sharedBy?: string;
-}
-
-// New route
-router.get("/public/:token", async (req, res) => {
-  // Validate token, check expiration
-  // Return report without authentication
-});
-```
+**Dependencies:** Task 06 (Report Storage)
 
 ---
 
@@ -414,33 +350,43 @@ When revisiting deferred decisions:
 
 ### By Priority
 
-**High Priority** (likely to implement soon):
-- [ ] Decision 10: Metadata in reports
-- [ ] Decision 13: Grounded analysis (quote linking)
-- [ ] Decision 14: Granular API endpoints
+**High Priority** (implemented):
+- [x] Decision 10: Metadata in reports → **Task 07 (Phase 4)**
+- [x] Decision 13: Grounded analysis (quote linking) → **Task 05 (Phase 1)**
+- [x] Decision 14: Granular API endpoints → **Task 03 (Phase 2)**
 
-**Medium Priority** (implement if requested):
-- [ ] Decision 11: Anonymization levels
-- [ ] Decision 15: Real-time updates
-- [ ] Decision 16: Persistent storage
+**Medium Priority** (implemented or deferred):
+- [ ] Decision 11: Anonymization levels → **Deferred** (compliance review 필요)
+- [x] Decision 15: Real-time updates → **Task 08 (Phase 4)**
+- [x] Decision 16: Persistent storage → **Task 06 (Phase 3)** - 저장소 기술 비종속 설계
 
-**Low Priority** (unlikely to implement):
-- [ ] Decision 17: Public sharing
-- [ ] Decision 12: Pipeline restructure
+**Low Priority** (implemented or deferred):
+- [x] Decision 17: Public sharing → **Task 09 (Phase 4)**
+- [ ] Decision 12: Pipeline restructure → **Deferred** (Phase 2 후 평가)
 
 ### By Phase
 
-**Phase 2** (After MVP - Q2 2026):
-- Grounded analysis (opinion → quote mapping)
-- Enhanced metadata
+**Phase 1** (Core MVP):
+- [x] Grounded analysis (opinion → quote mapping) - Task 05
 
-**Phase 3** (Based on feedback - Q3 2026):
-- Granular API endpoints
-- Real-time updates
+**Phase 2** (Visualization & API):
+- [x] Granular API endpoints - Task 03
 
-**Phase 4** (If needed - Q4 2026+):
-- Persistent storage
-- Public sharing
+**Phase 3** (Storage):
+- [x] Persistent storage - Task 06 ✅ **Designed**
+
+**Phase 4** (Enhanced Features):
+- [x] Enhanced metadata - Task 07 ✅ **Designed**
+- [x] Real-time updates - Task 08 ✅ **Designed**
+- [x] Public sharing - Task 09 ✅ **Designed**
+
+**Phase 5** (Quality & Reliability):
+- [x] Error handling - Task 10 ✅ **Designed**
+- [x] Testing strategy - Task 11 ✅ **Designed**
+
+**Remaining Deferred Decisions:**
+- [ ] Decision 11: Anonymization levels
+- [ ] Decision 12: Pipeline restructure
 
 ---
 
@@ -461,12 +407,28 @@ This document should be reviewed:
 | Version | Date | Changes | Reviewer |
 |---------|------|---------|----------|
 | 1.0 | 2026-01-26 | Initial document created | - |
+| 1.1 | 2026-01-26 | Decision 13 moved to Phase 1 (Task 05) | - |
+| 1.2 | 2026-01-27 | Decision 16 moved to Phase 3 (Task 06) | - |
+| 2.0 | 2026-01-27 | Decisions 10, 15, 17 moved to Phase 4 (Tasks 07, 08, 09); Added Phase 5 tasks (10, 11) | Claude |
 
 ---
 
 ## Related Documents
 
+### TRD Documents
 - [00-overview.md](./00-overview.md) - Main TRD overview
 - [README.md](./README.md) - TRD index
+- [CHANGELOG.md](./CHANGELOG.md) - TRD 변경 이력
+
+### Implemented TRDs (from this document)
+- [05-grounded-analysis.md](./05-grounded-analysis.md) - Decision 13 구현
+- [06-report-storage.md](./06-report-storage.md) - Decision 16 구현
+- [07-enhanced-metadata.md](./07-enhanced-metadata.md) - Decision 10 구현
+- [08-realtime-updates.md](./08-realtime-updates.md) - Decision 15 구현
+- [09-public-sharing.md](./09-public-sharing.md) - Decision 17 구현
+- [10-error-handling.md](./10-error-handling.md) - 추가 기능
+- [11-testing-strategy.md](./11-testing-strategy.md) - 추가 기능
+
+### External
 - Product roadmap (to be linked)
 - User feedback tracker (to be linked)
