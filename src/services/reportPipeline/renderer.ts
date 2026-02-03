@@ -1,4 +1,4 @@
-import { ReportStatistics, MessageCluster, RendererResult, ReportLanguage, ReportSynthesis } from "../../types/report";
+import { ReportStatistics, MessageCluster, RendererResult, ReportLanguage, ReportSynthesis, Opinion } from "../../types/report";
 
 // Localization strings
 const i18n: Record<ReportLanguage, Record<string, string>> = {
@@ -329,12 +329,17 @@ export function renderMarkdown(
       }
     }
 
-    // Key opinions (detailed list)
+    // Key opinions (detailed list) - TRD 05: Now using Opinion objects
     if (cluster.opinions.length > 0) {
       lines.push(`**${t.keyOpinions}:**`);
       lines.push("");
       for (const opinion of cluster.opinions) {
-        lines.push(`- ${opinion}`);
+        // TRD 05: Opinion is now an object with grounding info
+        const opinionText = typeof opinion === "string" ? opinion : opinion.text;
+        const mentionInfo = typeof opinion === "object" && opinion.mentionCount > 0
+          ? ` (${opinion.mentionCount} mentions)`
+          : "";
+        lines.push(`- ${opinionText}${mentionInfo}`);
       }
       lines.push("");
     }
