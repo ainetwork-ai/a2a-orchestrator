@@ -1,6 +1,6 @@
 # A2A Orchestrator Backend
 
-A multi-agent orchestration system using A2A (Agent-to-Agent) protocol. This is the backend server that manages agent conversations, world simulation, and report generation.
+A multi-agent orchestration system using A2A (Agent-to-Agent) protocol. This is the backend server that manages agent conversations, world simulation, and report generation with T3C-style visualization.
 
 ## Features
 
@@ -10,8 +10,9 @@ A multi-agent orchestration system using A2A (Agent-to-Agent) protocol. This is 
 - **Sequential Conversation Flow**: AI-recommended speaker order
 - **Block Summarization**: Conversation context compression
 - **Conversation Verification**: Automatic stop detection based on goal achievement
-- **Report Generation**: Asynchronous report generation with job tracking
-- **Redis Integration**: Conversation persistence and state management
+- **Report Generation**: Embedding-based clustering with T3C-style visualization
+- **Grounded Analysis**: Opinions linked to supporting messages for verifiability
+- **Redis Integration**: Conversation persistence, state management, and embedding cache
 
 ## Quick Start
 
@@ -23,8 +24,9 @@ Includes Redis container for full functionality.
 # Copy and configure environment file
 cp .env.dev.example .env.dev
 
-# Edit .env.dev with your LLM API settings
+# Edit .env.dev with your LLM API and Embedding API settings
 # Required: LLM_API_URL, LLM_MODEL
+# Required: OPENAI_API_KEY or Azure OpenAI embedding configuration
 
 # Start development environment (includes Redis)
 make dev
@@ -46,6 +48,7 @@ cp .env.prod.example .env.prod
 
 # Edit .env.prod with your production settings
 # Required: LLM_API_URL, LLM_MODEL, REDIS_URL
+# Required: OPENAI_API_KEY or Azure OpenAI embedding configuration
 
 # Start production environment
 make prod
@@ -73,6 +76,7 @@ cp .env.dev.example .env.dev
 # Edit .env.dev:
 # - Set REDIS_URL=redis://127.0.0.1:6379 (for local Redis)
 # - Configure LLM_API_URL and LLM_MODEL
+# - Configure embedding API (OpenAI or Azure OpenAI)
 
 # Make sure Redis is running locally
 # redis-server
@@ -101,6 +105,16 @@ LLM_API_URL=http://your-llm-server:8000/v1/chat/completions
 # LLM Model path
 LLM_MODEL=/path/to/your/model
 
+# Embedding API Configuration (Choose one)
+# Option 1: OpenAI
+OPENAI_API_KEY=sk-your-openai-api-key
+
+# Option 2: Azure OpenAI
+AZURE_OPENAI_EMBEDDING_BASE_URL=https://your-resource.openai.azure.com
+AZURE_OPENAI_EMBEDDING_API_KEY=your-azure-api-key
+AZURE_OPENAI_EMBEDDING_API_VERSION=2023-05-15
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME=text-embedding-3-large
+
 # SSL Configuration (allow self-signed certificates)
 NODE_TLS_REJECT_UNAUTHORIZED=0
 
@@ -124,6 +138,10 @@ LLM_API_URL=https://your-production-llm-server:8000/v1/chat/completions
 # LLM Model path
 LLM_MODEL=/path/to/your/model
 
+# Embedding API Configuration (Choose one)
+OPENAI_API_KEY=sk-your-openai-api-key
+# or Azure OpenAI configuration (see above)
+
 # SSL Configuration (commented out for production security)
 # NODE_TLS_REJECT_UNAUTHORIZED=0
 
@@ -131,38 +149,85 @@ LLM_MODEL=/path/to/your/model
 ALLOWED_ORIGINS=https://your-frontend-domain.com
 ```
 
+## Report Generation Pipeline
+
+The report pipeline uses embedding-based clustering for deterministic, cost-effective analysis:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Report Generation Pipeline                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  1. Parse Messages      │ Extract messages from threads                 │
+│  2. Generate Embeddings │ OpenAI/Azure text-embedding-3 (cached)        │
+│  3. Categorize          │ Embedding similarity (no LLM)                 │
+│  4. Cluster             │ UMAP + K-means (deterministic)                │
+│  5. Subtopic Clustering │ K-means within topics (dot grid)              │
+│  6. Analyze Clusters    │ LLM: labels, opinions, summaries              │
+│  7. Ground Opinions     │ LLM: link opinions to supporting messages     │
+│  8. Calculate Stats     │ Aggregations and distributions                │
+│  9. Synthesize          │ LLM: key findings, executive summary          │
+│ 10. Visualization       │ Scatter plot, topic tree, charts              │
+│ 11. Dot Grid            │ T3C-style message visualization               │
+│ 12. Render Markdown     │ Human-readable report                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Features
+
+- **Embedding Caching**: 30-day Redis cache for embeddings (cost savings on repeated analysis)
+- **Grounded Analysis**: Every opinion linked to supporting message IDs
+- **T3C Dot Grid**: Visual representation of messages with subtopic clustering
+- **Privacy-Safe**: No user IDs stored, only unique user counts via thread IDs
+
 ## Project Structure
 
 ```
 a2a-orchestrator/
 ├── src/
-│   ├── server.ts              # Server entry point
+│   ├── server.ts                    # Server entry point
 │   ├── routes/
-│   │   ├── chat.ts            # Chat API (deprecated)
-│   │   ├── threads.ts         # Thread management API
-│   │   ├── agents.ts          # Agent import API
-│   │   └── reports.ts         # Report generation API
-│   ├── world/                 # Orchestration logic
-│   │   ├── threadManager.ts   # Thread state management
-│   │   ├── world.ts           # World simulation
-│   │   ├── worldManager.ts    # World lifecycle management
-│   │   ├── messageDAG.ts      # Message DAG structure
-│   │   ├── requestManager.ts  # Request handling
-│   │   └── verifier.ts        # Conversation verification
+│   │   ├── threads.ts               # Thread management API
+│   │   ├── agents.ts                # Agent import API
+│   │   └── reports.ts               # Report generation API
+│   ├── world/                       # Orchestration logic
+│   │   ├── threadManager.ts         # Thread state management
+│   │   ├── world.ts                 # World simulation
+│   │   ├── worldManager.ts          # World lifecycle management
+│   │   ├── messageDAG.ts            # Message DAG structure
+│   │   ├── requestManager.ts        # LLM request handling
+│   │   └── verifier.ts              # Conversation verification
 │   ├── services/
-│   │   └── reportService.ts   # Report generation service
+│   │   ├── reportService.ts         # Report job management
+│   │   └── reportPipeline/          # Report generation pipeline
+│   │       ├── index.ts             # Pipeline orchestration
+│   │       ├── parser.ts            # Thread message parsing
+│   │       ├── embedder.ts          # OpenAI/Azure embedding
+│   │       ├── categorizer.ts       # Embedding-based categorization
+│   │       ├── clusterer.ts         # UMAP + K-means clustering
+│   │       ├── subtopicClusterer.ts # Subtopic clustering (TRD 13)
+│   │       ├── clusterAnalyzer.ts   # LLM cluster analysis
+│   │       ├── grounding.ts         # Opinion grounding (TRD 05)
+│   │       ├── analyzer.ts          # Statistics calculation
+│   │       ├── synthesizer.ts       # Report synthesis
+│   │       ├── visualizer.ts        # Visualization data
+│   │       ├── dotGridGenerator.ts  # Dot grid (TRD 13)
+│   │       └── renderer.ts          # Markdown rendering
 │   ├── utils/
-│   │   └── redis.ts           # Redis utilities
+│   │   ├── redis.ts                 # Redis utilities
+│   │   ├── reportTransformer.ts     # T3C format transformer
+│   │   └── reportValidator.ts       # Report validation
 │   └── types/
-│       └── index.ts           # Type definitions
-├── dist/                      # Built files (generated)
-├── Dockerfile                 # Docker build configuration
-├── docker-compose.dev.yml     # Development environment (with Redis)
-├── docker-compose.prod.yml    # Production environment
-├── Makefile                   # Convenient commands
+│       ├── index.ts                 # Core type definitions
+│       ├── report.ts                # Report types (T3C)
+│       ├── embedding.ts             # Embedding types
+│       └── visualization.ts         # Visualization types
+├── dist/                            # Built files (generated)
+├── Dockerfile
+├── docker-compose.dev.yml
+├── docker-compose.prod.yml
+├── Makefile
 ├── package.json
-├── tsconfig.json
-└── .env.example
+└── tsconfig.json
 ```
 
 ## API Endpoints
@@ -188,12 +253,82 @@ POST   /api/agents/import        # Import agent from A2A endpoint
 
 ### Report Generation
 ```
-POST   /api/reports              # Create report generation job
-GET    /api/reports/:jobId       # Get report status/result
+POST   /api/reports              # Create report job
+GET    /api/reports              # List reports (paginated, filterable)
+GET    /api/reports/:jobId       # Get report (format: json|markdown|full)
+PATCH  /api/reports/:jobId       # Update report metadata
+DELETE /api/reports/:jobId       # Delete report
+GET    /api/reports/:jobId/topics        # Get topics only
+GET    /api/reports/:jobId/visualization # Get visualization data
+GET    /api/reports/:jobId/statistics    # Get statistics
+GET    /api/reports/:jobId/markdown      # Get markdown (plain text)
+```
+
+### Report API Examples
+
+**Create Report:**
+```bash
+curl -X POST http://localhost:3006/api/reports \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Weekly Analysis",
+    "description": "User feedback analysis",
+    "tags": ["weekly", "feedback"],
+    "language": "ko"
+  }'
+```
+
+**Get Report (T3C JSON format):**
+```bash
+curl "http://localhost:3006/api/reports/{jobId}?format=full"
+```
+
+**List Reports with Filtering:**
+```bash
+curl "http://localhost:3006/api/reports?page=1&limit=20&tags=weekly&status=completed"
+```
+
+## T3C Report Format
+
+The API returns reports in T3C (Talk to the City) compatible format:
+
+```json
+{
+  "id": "report-uuid",
+  "title": "Report Title",
+  "version": "1.0.0",
+  "metadata": {
+    "processingTime": 15000,
+    "scope": { "totalMessages": 500, "substantiveMessages": 420 },
+    "filtering": { "filteringRate": 16.0, "filterReasons": {...} }
+  },
+  "statistics": { "totalMessages": 420, "topTopics": [...] },
+  "synthesis": { "keyFindings": [...], "executiveSummary": "..." },
+  "topics": [
+    {
+      "id": "topic-1",
+      "name": "Feature Requests",
+      "opinions": [
+        {
+          "text": "Users want dark mode",
+          "supportingMessages": ["msg-1", "msg-5", "msg-12"],
+          "mentionCount": 15,
+          "confidence": 0.92
+        }
+      ],
+      "subtopics": [
+        { "id": "st-1", "label": "UI Improvements", "messageCount": 25 }
+      ]
+    }
+  ],
+  "visualization": { "scatterPlot": {...}, "topicTree": {...} },
+  "dotGrid": { "topics": [...], "totalMessages": 420 }
+}
 ```
 
 ## How It Works
 
+### Conversation Flow
 1. **Thread Creation**: Create a conversation thread
 2. **Agent Addition**: Add AI agents to the thread
 3. **Message Sending**: User sends a message to the thread
@@ -202,6 +337,12 @@ GET    /api/reports/:jobId       # Get report status/result
 6. **Agent Response**: Selected agent responds via A2A protocol
 7. **Verification**: System checks if conversation goal is achieved
 8. **Continuation**: Process continues until goal achieved or conversation stalls
+
+### Report Generation Flow
+1. **Job Creation**: POST creates async job, returns jobId
+2. **Processing**: Pipeline processes messages (SSE updates available)
+3. **Completion**: Report available via GET with format parameter
+4. **Caching**: Identical requests return cached results
 
 ## Docker Architecture
 
@@ -228,6 +369,9 @@ npm run build
 # Run production build
 npm start
 
+# Type check
+npx tsc --noEmit
+
 # Lint code
 npm run lint
 ```
@@ -252,12 +396,14 @@ make prod-logs    # View logs
 
 ## Technology Stack
 
-- **Runtime**: Node.js 20
+- **Runtime**: Node.js 22
 - **Framework**: Express.js
 - **Language**: TypeScript
-- **Database**: Redis (for state persistence)
+- **Database**: Redis (state, cache, embeddings)
 - **Protocol**: A2A (Agent-to-Agent)
-- **AI Integration**: vLLM chat completions API
+- **AI Integration**: vLLM / OpenAI compatible API
+- **Embeddings**: OpenAI / Azure OpenAI text-embedding-3
+- **Clustering**: UMAP-js + K-means
 
 ## License
 
