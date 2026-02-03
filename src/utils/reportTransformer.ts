@@ -8,6 +8,7 @@ import {
   ReportMetadata,
   VisualizationData,
   CategorizedMessage,
+  MessageClusterWithSubtopics,
 } from "../types/report";
 
 /**
@@ -20,6 +21,10 @@ export function transformToT3CFormat(
 ): T3CReport {
   const topics: Topic[] = report.clusters.map((cluster) => {
     const sentimentDistribution = calculateSentimentDistribution(cluster.messages);
+
+    // TRD 13: Check if cluster has subtopics
+    const clusterWithSubtopics = cluster as MessageClusterWithSubtopics;
+    const hasSubtopics = clusterWithSubtopics.subtopics && clusterWithSubtopics.subtopics.length > 0;
 
     return {
       id: cluster.id,
@@ -44,7 +49,9 @@ export function transformToT3CFormat(
       summary: cluster.summary,
       nextSteps: cluster.nextSteps,
       position: findTopicPosition(report.visualization, cluster.id),
-      color: findTopicColor(report.visualization, cluster.id),
+      // TRD 13: Subtopics for dot grid visualization
+      subtopics: hasSubtopics ? clusterWithSubtopics.subtopics : undefined,
+      uniqueUserCount: hasSubtopics ? clusterWithSubtopics.uniqueUserCount : undefined,
     };
   });
 
@@ -60,6 +67,7 @@ export function transformToT3CFormat(
     synthesis: report.synthesis,
     topics,
     visualization: report.visualization || createDefaultVisualization(),
+    dotGrid: report.dotGrid,  // TRD 13
   };
 }
 
@@ -174,22 +182,6 @@ function findTopicPosition(
   );
 
   return point ? { x: point.x, y: point.y } : undefined;
-}
-
-/**
- * Find topic color from visualization data
- */
-function findTopicColor(
-  visualization: VisualizationData | undefined,
-  topicId: string
-): string | undefined {
-  if (!visualization?.scatterPlot?.points) return undefined;
-
-  const point = visualization.scatterPlot.points.find(
-    (p) => p.id === topicId && p.type === "topic"
-  );
-
-  return point?.color;
 }
 
 /**

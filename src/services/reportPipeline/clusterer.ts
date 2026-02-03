@@ -127,8 +127,9 @@ export async function clusterByEmbedding(
 
 /**
  * K-means clustering algorithm with deterministic seeding
+ * Exported for reuse in subtopic clustering (TRD 13)
  */
-function kMeans(
+export function kMeans(
   data: number[][],
   k: number,
   maxIterations: number = CLUSTER_CONFIG.kMeansMaxIterations

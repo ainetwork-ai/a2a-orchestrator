@@ -16,7 +16,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { parseThreads } from "./parser";
-import { embedMessages, createOpenAIEmbedder } from "./embedder";
+import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
 import {
   categorizeEmbeddedMessages,
   categorizeByEmbedding,
@@ -24,11 +24,13 @@ import {
   calculateFilteringBreakdown,
 } from "./categorizer";
 import { clusterByEmbedding } from "./clusterer";
+import { addSubtopicsToAllClusters } from "./subtopicClusterer";
 import { analyzeClusters } from "./clusterAnalyzer";
 import { analyzeData } from "./analyzer";
 import { groundOpinions } from "./grounding";
 import { synthesizeReport } from "./synthesizer";
 import { generateVisualizationData } from "./visualizer";
+import { generateDotGridData } from "./dotGridGenerator";
 import { renderMarkdown } from "./renderer";
 import {
   Report,
@@ -41,18 +43,20 @@ import { validateReportMessages, validateStatistics } from "../../utils/reportVa
 export type ProgressCallback = (progress: ReportJobProgress) => void;
 
 /**
- * New pipeline steps (TRD 12)
+ * Pipeline steps (TRD 12 + TRD 13)
  */
 const STEPS = [
   "Parsing messages",
   "Generating embeddings",
   "Categorizing",
   "Clustering",
+  "Subtopic clustering",      // TRD 13
   "Analyzing clusters",
   "Grounding opinions",
   "Calculating statistics",
   "Synthesizing insights",
   "Generating visualization",
+  "Generating dot grid",      // TRD 13
   "Rendering report",
 ];
 
@@ -61,17 +65,38 @@ let embedFn: EmbedFunction | null = null;
 
 /**
  * Initialize the embedder function
+ * Supports both Azure OpenAI and standard OpenAI
  */
 function getEmbedder(): EmbedFunction {
   if (!embedFn) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "OPENAI_API_KEY environment variable is required for embedding-based pipeline. " +
-        "Please set it in your .env file."
-      );
+    // Check for Azure OpenAI configuration first
+    const azureBaseUrl = process.env.AZURE_OPENAI_EMBEDDING_BASE_URL;
+    const azureApiKey = process.env.AZURE_OPENAI_EMBEDDING_API_KEY;
+    const azureApiVersion = process.env.AZURE_OPENAI_EMBEDDING_API_VERSION;
+    const azureDeploymentName = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME;
+
+    if (azureBaseUrl && azureApiKey && azureDeploymentName) {
+      console.log(`[ReportPipeline] Using Azure OpenAI embedder: ${azureDeploymentName}`);
+      const config: AzureOpenAIConfig = {
+        baseUrl: azureBaseUrl,
+        apiKey: azureApiKey,
+        apiVersion: azureApiVersion || "2023-05-15",
+        deploymentName: azureDeploymentName,
+      };
+      embedFn = createAzureOpenAIEmbedder(config);
+    } else {
+      // Fallback to standard OpenAI
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        throw new Error(
+          "Embedding API configuration is required. Set either:\n" +
+          "1. Azure OpenAI: AZURE_OPENAI_EMBEDDING_BASE_URL, AZURE_OPENAI_EMBEDDING_API_KEY, AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME\n" +
+          "2. OpenAI: OPENAI_API_KEY"
+        );
+      }
+      console.log("[ReportPipeline] Using OpenAI embedder");
+      embedFn = createOpenAIEmbedder(apiKey);
     }
-    embedFn = createOpenAIEmbedder(apiKey);
   }
   return embedFn;
 }
@@ -159,26 +184,35 @@ export async function generateReport(
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Step 5: Analyze clusters (LLM - labels, opinions, summaries)
+  // Step 5: Subtopic clustering (TRD 13)
   updateProgress(5);
   console.log(`[ReportPipeline] Step 5: ${STEPS[4]}`);
-  const analyzedClusters = await analyzeClusters(
+  const clustersWithSubtopics = await addSubtopicsToAllClusters(
     clustererResult.clusters,
+    substantiveMessages
+  );
+  console.log(`[ReportPipeline] Added subtopics to ${clustersWithSubtopics.length} clusters`);
+
+  // Step 6: Analyze clusters (LLM - labels, opinions, summaries)
+  updateProgress(6);
+  console.log(`[ReportPipeline] Step 6: ${STEPS[5]}`);
+  const analyzedClusters = await analyzeClusters(
+    clustersWithSubtopics,
     apiUrl,
     model,
     language
   );
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
-  // Step 6: Ground opinions (LLM)
-  updateProgress(6);
-  console.log(`[ReportPipeline] Step 6: ${STEPS[5]}`);
+  // Step 7: Ground opinions (LLM)
+  updateProgress(7);
+  console.log(`[ReportPipeline] Step 7: ${STEPS[6]}`);
   const groundingResult = await groundOpinions(analyzedClusters, apiUrl, model);
   console.log(`[ReportPipeline] Grounded opinions in ${groundingResult.clusters.length} clusters`);
 
-  // Step 7: Calculate statistics
-  updateProgress(7);
-  console.log(`[ReportPipeline] Step 7: ${STEPS[6]}`);
+  // Step 8: Calculate statistics
+  updateProgress(8);
+  console.log(`[ReportPipeline] Step 8: ${STEPS[7]}`);
   const analyzerResult = analyzeData(
     substantiveMessages,
     groundingResult.clusters,
@@ -189,9 +223,9 @@ export async function generateReport(
     filteringBreakdown
   );
 
-  // Step 8: Synthesize insights (LLM)
-  updateProgress(8);
-  console.log(`[ReportPipeline] Step 8: ${STEPS[7]}`);
+  // Step 9: Synthesize insights (LLM)
+  updateProgress(9);
+  console.log(`[ReportPipeline] Step 9: ${STEPS[8]}`);
   const synthesizerResult = await synthesizeReport(
     groundingResult.clusters,
     analyzerResult.statistics,
@@ -203,9 +237,9 @@ export async function generateReport(
     `[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`
   );
 
-  // Step 9: Generate visualization
-  updateProgress(9);
-  console.log(`[ReportPipeline] Step 9: ${STEPS[8]}`);
+  // Step 10: Generate visualization
+  updateProgress(10);
+  console.log(`[ReportPipeline] Step 10: ${STEPS[9]}`);
   const visualizerResult = await generateVisualizationData(
     groundingResult.clusters,
     analyzerResult.statistics,
@@ -213,9 +247,19 @@ export async function generateReport(
   );
   console.log(`[ReportPipeline] Generated visualization data`);
 
-  // Step 10: Render markdown
-  updateProgress(10);
-  console.log(`[ReportPipeline] Step 10: ${STEPS[9]}`);
+  // Step 11: Generate dot grid (TRD 13)
+  // Use grounded clusters which have labeled subtopics from analyzeClusters
+  updateProgress(11);
+  console.log(`[ReportPipeline] Step 11: ${STEPS[10]}`);
+  const dotGridData = generateDotGridData(
+    groundingResult.clusters,
+    clustererResult.visualization
+  );
+  console.log(`[ReportPipeline] Generated dot grid: ${dotGridData.totalMessages} points, ${dotGridData.totalUniqueUsers} users`);
+
+  // Step 12: Render markdown
+  updateProgress(12);
+  console.log(`[ReportPipeline] Step 12: ${STEPS[11]}`);
   const rendererResult = renderMarkdown(
     analyzerResult.statistics,
     groundingResult.clusters,
@@ -232,6 +276,7 @@ export async function generateReport(
     clusters: groundingResult.clusters,
     synthesis: synthesizerResult.synthesis,
     visualization: visualizerResult.visualization,
+    dotGrid: dotGridData,  // TRD 13: Dot grid visualization
     markdown: rendererResult.markdown,
   };
 
@@ -293,18 +338,20 @@ function createEmptyReport(
 
 // Export pipeline components
 export { parseThreads } from "./parser";
-export { embedMessages, createOpenAIEmbedder } from "./embedder";
+export { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder } from "./embedder";
 export {
   categorizeByEmbedding,
   categorizeEmbeddedMessages,
   initializeCategoryEmbeddings,
 } from "./categorizer";
-export { clusterByEmbedding } from "./clusterer";
+export { clusterByEmbedding, kMeans } from "./clusterer";
+export { addSubtopicsToAllClusters, clusterSubtopics, countUniqueUsers } from "./subtopicClusterer";
 export { analyzeClusters } from "./clusterAnalyzer";
 export { groundOpinions } from "./grounding";
 export { synthesizeReport } from "./synthesizer";
 export { analyzeData } from "./analyzer";
 export { generateVisualizationData } from "./visualizer";
+export { generateDotGridData } from "./dotGridGenerator";
 export { renderMarkdown } from "./renderer";
 
 // Legacy exports for backward compatibility

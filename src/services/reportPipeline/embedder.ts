@@ -1,7 +1,7 @@
 /**
  * Embedder for TRD 12: Embedding-based Clustering Pipeline
  *
- * Generates embeddings for messages using OpenAI's text-embedding-3-small model
+ * Generates embeddings for messages using OpenAI or Azure OpenAI
  * with Redis caching for efficiency.
  */
 
@@ -16,6 +16,16 @@ import {
 } from "../../types/embedding";
 
 /**
+ * Azure OpenAI configuration
+ */
+export interface AzureOpenAIConfig {
+  baseUrl: string;
+  apiKey: string;
+  apiVersion: string;
+  deploymentName: string;
+}
+
+/**
  * Create an OpenAI embedder function
  * Uses dependency injection pattern for testability
  */
@@ -27,6 +37,30 @@ export function createOpenAIEmbedder(apiKey: string): EmbedFunction {
 
     const response = await openai.embeddings.create({
       model: EMBEDDING_CONFIG.model,
+      input: texts,
+    });
+
+    return response.data.map((d) => d.embedding);
+  };
+}
+
+/**
+ * Create an Azure OpenAI embedder function
+ */
+export function createAzureOpenAIEmbedder(config: AzureOpenAIConfig): EmbedFunction {
+  return async (texts: string[]): Promise<number[][]> => {
+    const { default: OpenAI } = await import("openai");
+
+    // Azure OpenAI uses a different base URL format
+    const openai = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: `${config.baseUrl}/openai/deployments/${config.deploymentName}`,
+      defaultQuery: { "api-version": config.apiVersion },
+      defaultHeaders: { "api-key": config.apiKey },
+    });
+
+    const response = await openai.embeddings.create({
+      model: config.deploymentName, // Azure uses deployment name as model
       input: texts,
     });
 

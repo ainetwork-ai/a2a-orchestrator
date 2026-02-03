@@ -1,7 +1,10 @@
 // Report related types
 
+import { DotGridVisualization } from "./visualization";
+
 export interface ParsedMessage {
   id: string;
+  threadId: string;  // Thread ID for unique user count (TRD 13)
   content: string;
   timestamp: number;
   // userId is removed for anonymization
@@ -36,6 +39,34 @@ export interface MessageCluster {
   opinions: Opinion[]; // Grounded opinions with supporting messages (TRD 05)
   summary: ClusterSummary;
   nextSteps: ActionItem[];
+}
+
+// ============================================
+// TRD 13: Subtopic Types for Dot Grid
+// ============================================
+
+/**
+ * Subtopic within a topic cluster (TRD 13)
+ */
+export interface Subtopic {
+  id: string;
+  index: number;              // Order index for frontend color generation
+  label: string;              // LLM-generated label
+  messageIds: string[];       // IDs of messages in this subtopic
+  messageCount: number;
+  uniqueUserCount: number;    // Unique users (based on threadId)
+  centroid?: {                // Center point in UMAP space
+    x: number;
+    y: number;
+  };
+}
+
+/**
+ * Extended MessageCluster with subtopics (TRD 13)
+ */
+export interface MessageClusterWithSubtopics extends MessageCluster {
+  subtopics: Subtopic[];
+  uniqueUserCount: number;    // Unique users in the entire topic
 }
 
 export interface ReportStatistics {
@@ -73,9 +104,10 @@ export interface Report {
   title: string;
   createdAt: number;
   statistics: ReportStatistics;
-  clusters: MessageCluster[];
+  clusters: MessageClusterWithSubtopics[];  // TRD 13: Now includes subtopics
   synthesis?: ReportSynthesis;     // Total summary across all clusters
   visualization?: VisualizationData; // T3C-style visualization data
+  dotGrid?: DotGridVisualization;  // TRD 13: Dot grid visualization data
   markdown: string;
 }
 
@@ -249,7 +281,7 @@ export interface SynthesizerResult {
  * Grounding pipeline step result (TRD 05)
  */
 export interface GroundingResult {
-  clusters: MessageCluster[];  // Clusters with grounded opinions
+  clusters: MessageClusterWithSubtopics[];  // Clusters with grounded opinions (TRD 13: includes subtopics)
   performanceMs?: number;      // Time taken for grounding step
 }
 
@@ -266,8 +298,8 @@ export interface Opinion {
   type: "consensus" | "conflicting" | "general";
 
   // Grounding fields (TRD 05 - Phase 1A)
-  supportingMessages: string[];    // Message IDs (1-3 representative examples)
-  mentionCount: number;            // Total messages that support this opinion
+  supportingMessages: string[];    // All message IDs that support this opinion
+  mentionCount: number;            // Count of supporting messages (= supportingMessages.length)
   representativeQuote?: string;    // Best single example quote
   confidence?: number;             // 0-1, how well supported
 }
@@ -316,11 +348,14 @@ export interface Topic {
     x: number;
     y: number;
   };
-  color?: string;
+  // TRD 13: Subtopics for dot grid visualization
+  subtopics?: Subtopic[];
+  uniqueUserCount?: number;
 }
 
 /**
  * Scatter plot point for visualization
+ * Note: color is determined by frontend based on type/sentiment/category in metadata
  */
 export interface ScatterPoint {
   id: string;
@@ -329,7 +364,6 @@ export interface ScatterPoint {
   y: number;
   label: string;
   size?: number;
-  color?: string;
   metadata: {
     sentiment?: string;
     category?: string;
@@ -380,13 +414,13 @@ export interface TopicTreeData {
 
 /**
  * Chart data for various visualizations
+ * Note: colors are determined by frontend based on chart type and label
  */
 export interface ChartData {
   type: "bar" | "pie" | "line" | "area";
   data: Array<{
     label: string;
     value: number;
-    color?: string;
     metadata?: Record<string, unknown>;
   }>;
 }
@@ -446,6 +480,7 @@ export interface T3CReport {
   synthesis?: ReportSynthesis;
   topics: Topic[];
   visualization: VisualizationData;
+  dotGrid?: DotGridVisualization;  // TRD 13: Dot grid visualization
   markdown?: string;
 }
 

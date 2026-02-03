@@ -14,6 +14,8 @@ import { v4 as uuidv4 } from "uuid";
 import RequestManager from "../../world/requestManager";
 import {
   MessageCluster,
+  MessageClusterWithSubtopics,
+  Subtopic,
   CategorizedMessage,
   Opinion,
   ClusterSummary,
@@ -35,19 +37,20 @@ const ANALYZER_CONFIG = {
 
 /**
  * Analyze all clusters using LLM
+ * Supports both MessageCluster and MessageClusterWithSubtopics (TRD 13)
  *
- * @param clusters - Clusters from the clusterer
+ * @param clusters - Clusters from the clusterer (may include subtopics)
  * @param apiUrl - LLM API URL
  * @param model - LLM model to use
  * @param language - Output language (ko or en)
- * @returns Clusters with labels, opinions, summaries, and next steps
+ * @returns Clusters with labels, opinions, summaries, next steps, and labeled subtopics
  */
 export async function analyzeClusters(
-  clusters: MessageCluster[],
+  clusters: MessageCluster[] | MessageClusterWithSubtopics[],
   apiUrl: string,
   model: string,
   language: ReportLanguage = "ko"
-): Promise<MessageCluster[]> {
+): Promise<MessageClusterWithSubtopics[]> {
   console.log(`[ClusterAnalyzer] Analyzing ${clusters.length} clusters`);
 
   if (clusters.length === 0) {
@@ -64,9 +67,41 @@ export async function analyzeClusters(
     )
   );
 
-  console.log(`[ClusterAnalyzer] Complete: ${analyzedClusters.length} clusters analyzed`);
+  // Label subtopics if present (TRD 13)
+  const clustersWithLabeledSubtopics: MessageClusterWithSubtopics[] = await Promise.all(
+    analyzedClusters.map(async (cluster) => {
+      const clusterWithSubtopics = cluster as MessageClusterWithSubtopics;
 
-  return analyzedClusters;
+      // Ensure subtopics and uniqueUserCount are always present
+      const subtopics = clusterWithSubtopics.subtopics || [];
+      const uniqueUserCount = clusterWithSubtopics.uniqueUserCount || 0;
+
+      if (subtopics.length > 0) {
+        const labeledSubtopics = await labelSubtopics(
+          clusterWithSubtopics,
+          apiUrl,
+          model,
+          language
+        );
+        return {
+          ...cluster,
+          subtopics: labeledSubtopics,
+          uniqueUserCount,
+        };
+      }
+
+      // Return with empty subtopics if none exist
+      return {
+        ...cluster,
+        subtopics,
+        uniqueUserCount,
+      };
+    })
+  );
+
+  console.log(`[ClusterAnalyzer] Complete: ${clustersWithLabeledSubtopics.length} clusters analyzed`);
+
+  return clustersWithLabeledSubtopics;
 }
 
 /**
@@ -245,4 +280,123 @@ Respond in JSON format only:
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength - 3) + "...";
+}
+
+/**
+ * Label subtopics using LLM (TRD 13)
+ * Uses batch processing to label all subtopics in a single LLM call
+ *
+ * @param cluster - Cluster with subtopics
+ * @param apiUrl - LLM API URL
+ * @param model - LLM model to use
+ * @param language - Output language
+ * @returns Labeled subtopics
+ */
+async function labelSubtopics(
+  cluster: MessageClusterWithSubtopics,
+  apiUrl: string,
+  model: string,
+  language: ReportLanguage
+): Promise<Subtopic[]> {
+  if (cluster.subtopics.length === 0) {
+    return [];
+  }
+
+  console.log(
+    `[ClusterAnalyzer] Labeling ${cluster.subtopics.length} subtopics for "${cluster.topic}"`
+  );
+
+  // Build sample messages for each subtopic
+  const subtopicSamples = cluster.subtopics.map((sub) => {
+    const subtopicMessages = cluster.messages.filter((m) =>
+      sub.messageIds.includes(m.id)
+    );
+    const samples = subtopicMessages
+      .slice(0, 5)
+      .map((m) => `  - "${truncate(m.content, 100)}"`)
+      .join("\n");
+    return {
+      index: sub.index,
+      messageCount: sub.messageCount,
+      samples,
+    };
+  });
+
+  const langInstruction =
+    language === "ko"
+      ? "IMPORTANT: Write ALL labels in Korean."
+      : "Write all labels in English.";
+
+  const prompt = `You are analyzing subtopics within a topic cluster.
+
+${langInstruction}
+
+## Parent Topic: "${cluster.topic}"
+${cluster.description}
+
+## Subtopic Groups
+${subtopicSamples
+  .map(
+    (s) => `
+### Group ${s.index + 1} (${s.messageCount} messages)
+Sample messages:
+${s.samples}
+`
+  )
+  .join("\n")}
+
+## Task
+Provide a short, descriptive label (3-5 words) for each subtopic group.
+The label should distinguish this subtopic from others within the same parent topic.
+
+Respond in JSON format only:
+{
+  "labels": [
+    { "index": 0, "label": "서브토픽 라벨 1" },
+    { "index": 1, "label": "서브토픽 라벨 2" }
+  ]
+}`;
+
+  try {
+    const requestManager = RequestManager.getInstance();
+    const response = await requestManager.request(
+      apiUrl,
+      model,
+      [{ role: "user", content: prompt }],
+      1000,
+      0.3
+    );
+
+    const parsed = parseJsonResponse<{
+      labels?: Array<{ index: number; label: string }>;
+    }>(response);
+
+    // Apply labels to subtopics
+    const labelMap = new Map<number, string>();
+    for (const item of parsed.labels || []) {
+      if (typeof item.index === "number" && item.label) {
+        labelMap.set(item.index, item.label);
+      }
+    }
+
+    const labeledSubtopics = cluster.subtopics.map((sub) => ({
+      ...sub,
+      label: labelMap.get(sub.index) || sub.label,
+    }));
+
+    console.log(
+      `[ClusterAnalyzer] Labeled subtopics: ${labeledSubtopics
+        .map((s) => `"${s.label}"`)
+        .join(", ")}`
+    );
+
+    return labeledSubtopics;
+  } catch (error) {
+    console.error(
+      `[ClusterAnalyzer] Error labeling subtopics for "${cluster.topic}":`,
+      error
+    );
+    // Return original subtopics with default labels on error
+    return cluster.subtopics;
+  }
 }

@@ -9,6 +9,7 @@
 import RequestManager from "../../world/requestManager";
 import {
   MessageCluster,
+  MessageClusterWithSubtopics,
   Opinion,
   CategorizedMessage,
   GroundingResult,
@@ -18,13 +19,13 @@ import { parseJsonResponse } from "../../utils/llm";
 /**
  * Ground all opinions in clusters by linking them to supporting messages
  *
- * @param clusters - Clusters with opinions to ground
+ * @param clusters - Clusters with opinions to ground (may include subtopics from TRD 13)
  * @param apiUrl - LLM API URL
  * @param model - LLM model name
  * @returns Clusters with grounded opinions (including supportingMessages and mentionCount)
  */
 export async function groundOpinions(
-  clusters: MessageCluster[],
+  clusters: MessageClusterWithSubtopics[],
   apiUrl: string,
   model: string
 ): Promise<GroundingResult> {
@@ -53,16 +54,16 @@ export async function groundOpinions(
 /**
  * Ground opinions for a single cluster by linking to supporting messages
  *
- * @param cluster - Cluster with opinions to ground
+ * @param cluster - Cluster with opinions to ground (may include subtopics from TRD 13)
  * @param apiUrl - LLM API URL
  * @param model - LLM model name
- * @returns Cluster with grounded opinions
+ * @returns Cluster with grounded opinions (preserves subtopics)
  */
 async function groundClusterOpinions(
-  cluster: MessageCluster,
+  cluster: MessageClusterWithSubtopics,
   apiUrl: string,
   model: string
-): Promise<MessageCluster> {
+): Promise<MessageClusterWithSubtopics> {
   // Skip if no opinions or messages
   if (cluster.opinions.length === 0 || cluster.messages.length === 0) {
     console.log(
@@ -176,15 +177,14 @@ Messages in this cluster:
 ${JSON.stringify(messages, null, 2)}
 
 Instructions:
-For each opinion, identify which messages support it:
-1. Find messages that express or relate to the opinion (exact match not required - semantic similarity counts)
-2. Select the 1-3 BEST representative messages (most clear and relevant)
-3. Count the TOTAL number of messages that support this opinion (for mentionCount)
-4. Rate your confidence (0-1) in how well the messages support the opinion
+For each opinion, identify ALL messages that support it:
+1. Find ALL messages that express or relate to the opinion (exact match not required - semantic similarity counts)
+2. Include ALL supporting message indices in supportingMessageIndices (not just a few)
+3. Rate your confidence (0-1) in how well the messages support the opinion
 
 Important:
-- supportingMessageIndices should use the message "index" values (0, 1, 2, etc.)
-- mentionCount should reflect ALL supporting messages, not just the selected representatives
+- supportingMessageIndices should include ALL message indices that support the opinion
+- mentionCount should equal the length of supportingMessageIndices
 - confidence should be 0.9+ if messages clearly express the opinion, 0.5-0.9 if related, <0.5 if loosely connected
 - If an opinion has no clear supporting messages, set supportingMessageIndices to empty array and confidence to 0
 
@@ -193,13 +193,13 @@ Respond in JSON format only:
   "groundings": [
     {
       "opinionIndex": 0,
-      "supportingMessageIndices": [2, 5, 8],
+      "supportingMessageIndices": [2, 5, 8, 11, 15, 18, 22, 25, 30, 35, 40, 42],
       "mentionCount": 12,
       "confidence": 0.9
     },
     {
       "opinionIndex": 1,
-      "supportingMessageIndices": [1, 3],
+      "supportingMessageIndices": [1, 3, 7, 9, 14],
       "mentionCount": 5,
       "confidence": 0.75
     }

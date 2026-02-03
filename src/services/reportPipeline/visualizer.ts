@@ -136,7 +136,6 @@ function generateScatterPlotFromUMAP(
       y: centerY,
       label: cluster.topic,
       size: 0.2 + Math.min(cluster.messages.length / 100, 1) * 0.8,
-      color: getSentimentColor(cluster.summary.sentiment),
       metadata: {
         sentiment: cluster.summary.sentiment,
         messageCount: cluster.messages.length,
@@ -160,7 +159,6 @@ function generateScatterPlotFromUMAP(
           ? message.content.substring(0, 50) + "..."
           : message.content,
         size: 0.3,
-        color: getSentimentColor(message.sentiment || "neutral"),
         metadata: {
           sentiment: message.sentiment,
           category: message.category,
@@ -240,8 +238,6 @@ function createTopicPoint(
   const maxMessages = 100;
   const size = 0.2 + Math.min(cluster.messages.length / maxMessages, 1) * 0.8;
 
-  const color = getSentimentColor(cluster.summary.sentiment);
-
   return {
     id: cluster.id,
     type: "topic",
@@ -249,7 +245,6 @@ function createTopicPoint(
     y,
     label: cluster.topic,
     size,
-    color,
     metadata: {
       sentiment: cluster.summary.sentiment,
       messageCount: cluster.messages.length,
@@ -273,7 +268,6 @@ function createMessagePoint(
 
   const x = calculateCoordinate(message, config.xAxis, "message", dateRange);
   const y = calculateCoordinate(message, config.yAxis, "message", dateRange);
-  const color = getSentimentColor(message.sentiment || "neutral");
 
   return {
     id: message.id,
@@ -285,7 +279,6 @@ function createMessagePoint(
         ? message.content.substring(0, 50) + "..."
         : message.content,
     size: 0.3,
-    color,
     metadata: {
       sentiment: message.sentiment,
       category: message.category,
@@ -408,19 +401,6 @@ function calculatePriorityScore(
         return 0.5 + jitter;
     }
   }
-}
-
-/**
- * Get sentiment-based color
- */
-function getSentimentColor(sentiment: string): string {
-  const colors: Record<string, string> = {
-    positive: "#4CAF50",
-    negative: "#F44336",
-    neutral: "#9E9E9E",
-    mixed: "#FFC107",
-  };
-  return colors[sentiment] || colors.neutral;
 }
 
 /**
@@ -551,21 +531,9 @@ function generateSentimentChart(statistics: ReportStatistics): ChartData {
   return {
     type: "pie",
     data: [
-      {
-        label: "Positive",
-        value: sentimentDistribution.positive || 0,
-        color: "#4CAF50",
-      },
-      {
-        label: "Negative",
-        value: sentimentDistribution.negative || 0,
-        color: "#F44336",
-      },
-      {
-        label: "Neutral",
-        value: sentimentDistribution.neutral || 0,
-        color: "#9E9E9E",
-      },
+      { label: "Positive", value: sentimentDistribution.positive || 0 },
+      { label: "Negative", value: sentimentDistribution.negative || 0 },
+      { label: "Neutral", value: sentimentDistribution.neutral || 0 },
     ].filter((d) => d.value > 0),
   };
 }
@@ -576,22 +544,12 @@ function generateSentimentChart(statistics: ReportStatistics): ChartData {
 function generateCategoryChart(statistics: ReportStatistics): ChartData {
   const { categoryDistribution } = statistics;
 
-  const categoryColors: Record<string, string> = {
-    question: "#2196F3",
-    request: "#4ECDC4",
-    feedback: "#95E1D3",
-    complaint: "#FF6B6B",
-    information: "#FFA07A",
-    other: "#9E9E9E",
-  };
-
   return {
     type: "bar",
     data: Object.entries(categoryDistribution)
       .map(([label, value]) => ({
         label: capitalize(label),
         value,
-        color: categoryColors[label.toLowerCase()] || categoryColors.other,
       }))
       .sort((a, b) => b.value - a.value),
   };
@@ -607,7 +565,6 @@ function generateTopicChart(clusters: MessageCluster[]): ChartData {
       .map((cluster) => ({
         label: cluster.topic,
         value: cluster.messages.length,
-        color: getSentimentColor(cluster.summary.sentiment),
         metadata: {
           topicId: cluster.id,
           sentiment: cluster.summary.sentiment,
@@ -637,11 +594,7 @@ function generateTimelineChart(clusters: MessageCluster[]): ChartData {
   return {
     type: "line",
     data: Array.from(timeGroups.entries())
-      .map(([label, value]) => ({
-        label,
-        value,
-        color: "#2196F3",
-      }))
+      .map(([label, value]) => ({ label, value }))
       .sort((a, b) => a.label.localeCompare(b.label)),
   };
 }

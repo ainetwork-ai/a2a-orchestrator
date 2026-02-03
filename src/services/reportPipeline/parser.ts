@@ -86,6 +86,7 @@ export async function parseThreads(params: ReportRequestParams): Promise<ParserR
 
       parsedMessages.push({
         id: msg.id,
+        threadId: thread.id,  // Thread ID for unique user count (TRD 13)
         content: anonymizedContent,
         timestamp: msg.timestamp,
         // userId is intentionally not included for anonymization
