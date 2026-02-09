@@ -8,8 +8,17 @@ const router = Router();
 // Get all threads
 router.get("/", (req: Request, res: Response) => {
   try {
+    const { agent } = req.query;
     const threadManager = ThreadManager.getInstance();
-    const threads = threadManager.getAllThreads();
+    let threads = threadManager.getAllThreads();
+
+    // Filter by agent(s) if specified
+    if (agent) {
+      const agentNames = Array.isArray(agent) ? agent as string[] : [agent as string];
+      threads = threads.filter(thread =>
+        agentNames.some(name => thread.agents.some(a => a.name === name))
+      );
+    }
 
     res.json({
       success: true,
