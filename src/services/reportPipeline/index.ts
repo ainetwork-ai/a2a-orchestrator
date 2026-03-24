@@ -16,6 +16,8 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { parseThreads } from "./parser";
+import { parseConversations } from "./conversationParser";
+import { extractOpinions } from "./opinionExtractor";
 import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
 import {
   categorizeEmbeddedMessages,
@@ -32,10 +34,15 @@ import { synthesizeReport } from "./synthesizer";
 import { generateVisualizationData } from "./visualizer";
 import { generateDotGridData } from "./dotGridGenerator";
 import { renderMarkdown } from "./renderer";
+import { opinionsToParsedMessages, toCategorizedEmbedded } from "./pipelineUtils";
 import {
   Report,
   ReportRequestParams,
   ReportJobProgress,
+  ReportLanguage,
+  FilteringBreakdown,
+  type ConversationSegment,
+  type ExtractedOpinion,
 } from "../../types/report";
 import { EmbedFunction, CategorizedEmbeddedMessage } from "../../types/embedding";
 import { validateReportMessages, validateStatistics } from "../../utils/reportValidator";
@@ -43,9 +50,9 @@ import { validateReportMessages, validateStatistics } from "../../utils/reportVa
 export type ProgressCallback = (progress: ReportJobProgress) => void;
 
 /**
- * Pipeline steps (TRD 12 + TRD 13)
+ * Pipeline steps (TRD 12 + TRD 13) - Legacy
  */
-const STEPS = [
+const LEGACY_STEPS = [
   "Parsing messages",
   "Generating embeddings",
   "Categorizing",
@@ -57,6 +64,24 @@ const STEPS = [
   "Synthesizing insights",
   "Generating visualization",
   "Generating dot grid",      // TRD 13
+  "Rendering report",
+];
+
+/**
+ * Pipeline steps (EPIC1: Conversation-aware)
+ */
+const CONVERSATION_STEPS = [
+  "Parsing conversations",
+  "Extracting opinions",
+  "Generating embeddings",
+  "Clustering",
+  "Subtopic clustering",
+  "Analyzing clusters",
+  "Grounding opinions",
+  "Calculating statistics",
+  "Synthesizing insights",
+  "Generating visualization",
+  "Generating dot grid",
   "Rendering report",
 ];
 
@@ -102,7 +127,8 @@ function getEmbedder(): EmbedFunction {
 }
 
 /**
- * Execute the full report generation pipeline (TRD 12: Embedding-based)
+ * Execute the report generation pipeline.
+ * Dispatches to legacy or conversation-aware pipeline based on params.pipelineMode.
  */
 export async function generateReport(
   params: ReportRequestParams,
@@ -110,24 +136,31 @@ export async function generateReport(
   model: string,
   onProgress?: ProgressCallback
 ): Promise<Report> {
+  if (params.pipelineMode === "conversation") {
+    return generateConversationReport(params, apiUrl, model, onProgress);
+  }
+  return generateLegacyReport(params, apiUrl, model, onProgress);
+}
+
+/**
+ * Legacy pipeline (TRD 12: Embedding-based)
+ */
+async function generateLegacyReport(
+  params: ReportRequestParams,
+  apiUrl: string,
+  model: string,
+  onProgress?: ProgressCallback
+): Promise<Report> {
+  const steps = LEGACY_STEPS;
   const reportId = uuidv4();
   const title = params.title || "User Conversation Analysis Report";
-  const language = params.language || "ko";
+  const language: ReportLanguage = params.language || "ko";
 
-  const updateProgress = (step: number) => {
-    if (onProgress) {
-      onProgress({
-        step,
-        totalSteps: STEPS.length,
-        currentStep: STEPS[step - 1],
-        percentage: Math.round((step / STEPS.length) * 100),
-      });
-    }
-  };
+  const updateProgress = makeProgressUpdater(steps, onProgress);
 
   // Step 1: Parse threads (no sampling - process all messages)
   updateProgress(1);
-  console.log(`[ReportPipeline] Step 1: ${STEPS[0]}`);
+  console.log(`[ReportPipeline] Step 1: ${steps[0]}`);
   const parserResult = await parseThreads({
     ...params,
     maxMessages: undefined, // Remove sampling - TRD 12
@@ -145,7 +178,7 @@ export async function generateReport(
 
   // Step 2: Generate embeddings
   updateProgress(2);
-  console.log(`[ReportPipeline] Step 2: ${STEPS[1]}`);
+  console.log(`[ReportPipeline] Step 2: ${steps[1]}`);
   const embeddingResult = await embedMessages(parserResult.messages, embedder);
   console.log(
     `[ReportPipeline] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
@@ -153,7 +186,7 @@ export async function generateReport(
 
   // Step 3: Categorize using embeddings (no LLM)
   updateProgress(3);
-  console.log(`[ReportPipeline] Step 3: ${STEPS[2]}`);
+  console.log(`[ReportPipeline] Step 3: ${steps[2]}`);
   await initializeCategoryEmbeddings(embedder);
   const categorizedMessages = categorizeByEmbedding(embeddingResult.messages);
 
@@ -171,9 +204,138 @@ export async function generateReport(
     return createEmptyReport(reportId, title, parserResult.threadCount);
   }
 
-  // Step 4: Cluster using UMAP + K-means (no LLM)
-  updateProgress(4);
-  console.log(`[ReportPipeline] Step 4: ${STEPS[3]}`);
+  // Steps 4-12: shared pipeline
+  return runSharedPipeline({
+    steps, reportId, title, language, params, apiUrl, model,
+    substantiveMessages, threadCount: parserResult.threadCount,
+    totalMessagesBeforeSampling: parserResult.messages.length,
+    nonSubstantiveCount, filteringBreakdown,
+    onProgress, stepOffset: 3,
+  });
+}
+
+/**
+ * Conversation-aware pipeline (EPIC1)
+ */
+async function generateConversationReport(
+  params: ReportRequestParams,
+  apiUrl: string,
+  model: string,
+  onProgress?: ProgressCallback
+): Promise<Report> {
+  const steps = CONVERSATION_STEPS;
+  const reportId = uuidv4();
+  const title = params.title || "User Conversation Analysis Report";
+  const language: ReportLanguage = params.language || "ko";
+
+  const updateProgress = makeProgressUpdater(steps, onProgress);
+
+  // Step 1: Parse conversations into segments
+  updateProgress(1);
+  console.log(`[ReportPipeline:Conv] Step 1: ${steps[0]}`);
+  const conversationResult = await parseConversations(params);
+  console.log(
+    `[ReportPipeline:Conv] Parsed ${conversationResult.segments.length} segments from ${conversationResult.threadCount} threads`
+  );
+
+  if (conversationResult.segments.length === 0) {
+    return createEmptyReport(reportId, title, conversationResult.threadCount);
+  }
+
+  // Step 2: Extract opinions from segments using LLM
+  updateProgress(2);
+  console.log(`[ReportPipeline:Conv] Step 2: ${steps[1]}`);
+  const extractionResult = await extractOpinions(
+    conversationResult.segments, apiUrl, model, language
+  );
+  console.log(
+    `[ReportPipeline:Conv] Extracted ${extractionResult.opinions.length} opinions ` +
+    `(${extractionResult.failedSegments} failed, ${extractionResult.evolvedOpinionCount} evolved)`
+  );
+
+  if (extractionResult.opinions.length === 0) {
+    return createEmptyReport(reportId, title, conversationResult.threadCount);
+  }
+
+  // Step 3: Generate embeddings for opinion statements
+  updateProgress(3);
+  console.log(`[ReportPipeline:Conv] Step 3: ${steps[2]}`);
+  const embedder = getEmbedder();
+  const parsedMessages = opinionsToParsedMessages(extractionResult.opinions);
+  const embeddingResult = await embedMessages(parsedMessages, embedder);
+  console.log(
+    `[ReportPipeline:Conv] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
+  );
+
+  // Adapt to CategorizedEmbeddedMessage (stance → category/sentiment mapping)
+  const categorizedMessages = toCategorizedEmbedded(
+    embeddingResult.messages, extractionResult.opinions
+  );
+
+  // Steps 4-12: shared pipeline
+  return runSharedPipeline({
+    steps, reportId, title, language, params, apiUrl, model,
+    substantiveMessages: categorizedMessages,
+    threadCount: conversationResult.threadCount,
+    totalMessagesBeforeSampling: conversationResult.totalMessages,
+    nonSubstantiveCount: 0,
+    onProgress, stepOffset: 3,
+    extractedOpinions: extractionResult.opinions,
+    conversationSegments: conversationResult.segments,
+  });
+}
+
+/**
+ * Create a progress updater function for a given step list
+ */
+function makeProgressUpdater(steps: string[], onProgress?: ProgressCallback) {
+  return (step: number) => {
+    if (onProgress) {
+      onProgress({
+        step,
+        totalSteps: steps.length,
+        currentStep: steps[step - 1],
+        percentage: Math.round((step / steps.length) * 100),
+      });
+    }
+  };
+}
+
+/**
+ * Shared pipeline from clustering through rendering (Steps 4-12)
+ */
+async function runSharedPipeline(opts: {
+  steps: string[];
+  reportId: string;
+  title: string;
+  language: ReportLanguage;
+  params: ReportRequestParams;
+  apiUrl: string;
+  model: string;
+  substantiveMessages: CategorizedEmbeddedMessage[];
+  threadCount: number;
+  totalMessagesBeforeSampling: number;
+  nonSubstantiveCount: number;
+  filteringBreakdown?: FilteringBreakdown;
+  onProgress?: ProgressCallback;
+  stepOffset: number;
+  extractedOpinions?: ExtractedOpinion[];
+  conversationSegments?: ConversationSegment[];
+}): Promise<Report> {
+  const {
+    steps, reportId, title, language, params, apiUrl, model,
+    substantiveMessages, threadCount, totalMessagesBeforeSampling,
+    nonSubstantiveCount, filteringBreakdown, stepOffset,
+    extractedOpinions, conversationSegments,
+  } = opts;
+
+  const updateProgress = makeProgressUpdater(steps, opts.onProgress);
+  let step = stepOffset;
+
+  // Clustering
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const clustererResult = await clusterByEmbedding(substantiveMessages);
   console.log(`[ReportPipeline] Created ${clustererResult.clusters.length} clusters`);
 
@@ -184,86 +346,75 @@ export async function generateReport(
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Step 5: Subtopic clustering (TRD 13)
-  updateProgress(5);
-  console.log(`[ReportPipeline] Step 5: ${STEPS[4]}`);
+  // Subtopic clustering
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const clustersWithSubtopics = await addSubtopicsToAllClusters(
-    clustererResult.clusters,
-    substantiveMessages
+    clustererResult.clusters, substantiveMessages
   );
   console.log(`[ReportPipeline] Added subtopics to ${clustersWithSubtopics.length} clusters`);
 
-  // Step 6: Analyze clusters (LLM - labels, opinions, summaries)
-  updateProgress(6);
-  console.log(`[ReportPipeline] Step 6: ${STEPS[5]}`);
+  // Analyze clusters
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const analyzedClusters = await analyzeClusters(
-    clustersWithSubtopics,
-    apiUrl,
-    model,
-    language
+    clustersWithSubtopics, apiUrl, model, language
   );
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
-  // Step 7: Ground opinions (LLM)
-  updateProgress(7);
-  console.log(`[ReportPipeline] Step 7: ${STEPS[6]}`);
+  // Ground opinions
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const groundingResult = await groundOpinions(analyzedClusters, apiUrl, model);
   console.log(`[ReportPipeline] Grounded opinions in ${groundingResult.clusters.length} clusters`);
 
-  // Step 8: Calculate statistics
-  updateProgress(8);
-  console.log(`[ReportPipeline] Step 8: ${STEPS[7]}`);
+  // Calculate statistics
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const analyzerResult = analyzeData(
-    substantiveMessages,
-    groundingResult.clusters,
-    parserResult.threadCount,
-    parserResult.messages.length, // Total messages (no sampling)
-    false, // wasSampled = false (TRD 12)
-    nonSubstantiveCount,
-    filteringBreakdown
+    substantiveMessages, groundingResult.clusters, threadCount,
+    totalMessagesBeforeSampling, false, nonSubstantiveCount, filteringBreakdown
   );
 
-  // Step 9: Synthesize insights (LLM)
-  updateProgress(9);
-  console.log(`[ReportPipeline] Step 9: ${STEPS[8]}`);
+  // Synthesize insights
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const synthesizerResult = await synthesizeReport(
-    groundingResult.clusters,
-    analyzerResult.statistics,
-    apiUrl,
-    model,
-    language
+    groundingResult.clusters, analyzerResult.statistics, apiUrl, model, language
   );
   console.log(
     `[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`
   );
 
-  // Step 10: Generate visualization
-  updateProgress(10);
-  console.log(`[ReportPipeline] Step 10: ${STEPS[9]}`);
+  // Generate visualization
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const visualizerResult = await generateVisualizationData(
-    groundingResult.clusters,
-    analyzerResult.statistics,
-    clustererResult.visualization // Pass UMAP coordinates
+    groundingResult.clusters, analyzerResult.statistics, clustererResult.visualization
   );
   console.log(`[ReportPipeline] Generated visualization data`);
 
-  // Step 11: Generate dot grid (TRD 13)
-  // Use grounded clusters which have labeled subtopics from analyzeClusters
-  updateProgress(11);
-  console.log(`[ReportPipeline] Step 11: ${STEPS[10]}`);
+  // Generate dot grid
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const dotGridData = generateDotGridData(
-    groundingResult.clusters,
-    clustererResult.visualization
+    groundingResult.clusters, clustererResult.visualization
   );
   console.log(`[ReportPipeline] Generated dot grid: ${dotGridData.totalMessages} points, ${dotGridData.totalUniqueUsers} users`);
 
-  // Step 12: Render markdown
-  updateProgress(12);
-  console.log(`[ReportPipeline] Step 12: ${STEPS[11]}`);
+  // Render markdown
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
   const rendererResult = renderMarkdown(
-    analyzerResult.statistics,
-    groundingResult.clusters,
-    synthesizerResult.synthesis,
+    analyzerResult.statistics, groundingResult.clusters, synthesizerResult.synthesis,
     { timezone: params.timezone, language: params.language }
   );
 
@@ -276,8 +427,10 @@ export async function generateReport(
     clusters: groundingResult.clusters,
     synthesis: synthesizerResult.synthesis,
     visualization: visualizerResult.visualization,
-    dotGrid: dotGridData,  // TRD 13: Dot grid visualization
+    dotGrid: dotGridData,
     markdown: rendererResult.markdown,
+    ...(extractedOpinions && { extractedOpinions }),
+    ...(conversationSegments && { conversationSegments }),
   };
 
   // Validation
@@ -293,17 +446,15 @@ export async function generateReport(
   if (messageValidation.warnings.length > 0) {
     console.warn("[ReportPipeline] Message validation warnings:", messageValidation.warnings);
   }
-
   if (statsValidation.warnings.length > 0) {
     console.warn("[ReportPipeline] Statistics validation warnings:", statsValidation.warnings);
   }
 
   console.log(
     `[ReportPipeline] Validation passed: ${report.clusters.length} clusters, ` +
-    `${report.statistics.totalMessages} substantive messages`
+    `${report.statistics.totalMessages} messages`
   );
   console.log(`[ReportPipeline] Report generation completed`);
-
   return report;
 }
 
@@ -338,6 +489,8 @@ function createEmptyReport(
 
 // Export pipeline components
 export { parseThreads } from "./parser";
+export { parseConversations } from "./conversationParser";
+export { extractOpinions } from "./opinionExtractor";
 export { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder } from "./embedder";
 export {
   categorizeByEmbedding,
