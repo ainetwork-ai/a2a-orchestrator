@@ -136,6 +136,7 @@ export async function generateReport(
   model: string,
   onProgress?: ProgressCallback
 ): Promise<Report> {
+  console.log("[ReportPipeline] Starting generateReport with params:", JSON.stringify(params));
   if (params.pipelineMode === "conversation") {
     return generateConversationReport(params, apiUrl, model, onProgress);
   }

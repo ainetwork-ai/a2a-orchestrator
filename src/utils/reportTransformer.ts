@@ -68,6 +68,9 @@ export function transformToT3CFormat(
     topics,
     visualization: report.visualization || createDefaultVisualization(),
     dotGrid: report.dotGrid,  // TRD 13
+    // EPIC1: pass through conversation data if present
+    extractedOpinions: report.extractedOpinions,
+    conversationSegments: report.conversationSegments,
   };
 }
 

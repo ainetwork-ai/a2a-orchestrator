@@ -494,6 +494,9 @@ export interface T3CReport {
   synthesis?: ReportSynthesis;
   topics: Topic[];
   visualization: VisualizationData;
+  // EPIC1: Conversation-aware opinion extraction
+  extractedOpinions?: ExtractedOpinion[];
+  conversationSegments?: ConversationSegment[];
   dotGrid?: DotGridVisualization;  // TRD 13: Dot grid visualization
   markdown?: string;
 }
