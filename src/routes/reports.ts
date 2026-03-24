@@ -616,6 +616,43 @@ router.patch("/:jobId", async (req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/reports/cache
+ * Invalidate report cache
+ * Must be registered before /:jobId to avoid "cache" matching as a jobId param.
+ *
+ * Body:
+ * - threadIds?: string[] - Specific params to invalidate (optional, all if empty)
+ */
+router.delete("/cache", async (req: Request, res: Response) => {
+  try {
+    const { threadIds, startDate, endDate } = req.body;
+
+    const params: ReportRequestParams | undefined =
+      threadIds || startDate || endDate
+        ? {
+            threadIds: threadIds || undefined,
+            startDate: startDate || undefined,
+            endDate: endDate || undefined,
+          }
+        : undefined;
+
+    const reportService = ReportService.getInstance();
+    await reportService.invalidateCache(params);
+
+    res.json({
+      success: true,
+      message: params ? "Specific cache invalidated" : "All cache invalidated",
+    });
+  } catch (error: any) {
+    console.error("Error invalidating cache:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error",
+    });
+  }
+});
+
+/**
  * DELETE /api/reports/:jobId
  * Delete a report job (TRD 06)
  *
@@ -653,42 +690,6 @@ router.delete("/:jobId", async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Internal server error",
-    });
-  }
-});
-
-/**
- * DELETE /api/reports/cache
- * Invalidate report cache
- *
- * Body:
- * - threadIds?: string[] - Specific params to invalidate (optional, all if empty)
- */
-router.delete("/cache", async (req: Request, res: Response) => {
-  try {
-    const { threadIds, startDate, endDate } = req.body;
-
-    const params: ReportRequestParams | undefined =
-      threadIds || startDate || endDate
-        ? {
-            threadIds: threadIds || undefined,
-            startDate: startDate || undefined,
-            endDate: endDate || undefined,
-          }
-        : undefined;
-
-    const reportService = ReportService.getInstance();
-    await reportService.invalidateCache(params);
-
-    res.json({
-      success: true,
-      message: params ? "Specific cache invalidated" : "All cache invalidated",
-    });
-  } catch (error: any) {
-    console.error("Error invalidating cache:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Internal server error",
     });
   }
 });
