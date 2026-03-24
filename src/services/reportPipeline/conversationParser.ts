@@ -59,7 +59,10 @@ export async function parseConversations(
 
     dateFiltered.sort((a, b) => a.timestamp - b.timestamp);
 
-    const segments = splitIntoSegments(dateFiltered, thread.id);
+    let segments = splitIntoSegments(dateFiltered, thread.id);
+
+    // Filter segments to only those where the requested agent(s) participated
+    segments = filterSegmentsByAgent(segments, params);
 
     for (const segment of segments) {
       allSegments.push(segment);
@@ -149,4 +152,26 @@ function splitIntoSegments(
   flushSegment();
 
   return segments;
+}
+
+/**
+ * Filter segments to only those where the requested agent(s) participated.
+ * If no agent filter is specified, all segments pass through.
+ */
+function filterSegmentsByAgent(
+  segments: ConversationSegment[],
+  params: ReportRequestParams
+): ConversationSegment[] {
+  const hasAgentFilter =
+    (params.agentNames && params.agentNames.length > 0) ||
+    (params.agentUrls && params.agentUrls.length > 0);
+
+  if (!hasAgentFilter) return segments;
+
+  // agentNames filter: keep segments where at least one non-user message is from a requested agent
+  const targetNames = new Set(params.agentNames || []);
+
+  return segments.filter((segment) =>
+    segment.messages.some((m) => !m.isUser && targetNames.has(m.speaker))
+  );
 }
