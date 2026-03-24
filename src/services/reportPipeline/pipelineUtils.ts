@@ -9,6 +9,7 @@ import {
   ReportLanguage,
   ParsedMessage,
   ExtractedOpinion,
+  MessageClusterWithSubtopics,
   DEFAULT_DATE_RANGE_DAYS,
 } from "../../types/report";
 import { EmbeddedMessage, CategorizedEmbeddedMessage } from "../../types/embedding";
@@ -150,4 +151,32 @@ export function toCategorizedEmbedded(
       isSubstantive: true,
     };
   });
+}
+
+/**
+ * Post-process grounded clusters to attach sourceSegmentIds.
+ * Links Opinion.supportingMessages (ExtractedOpinion IDs) → ExtractedOpinion.source.segmentId.
+ */
+export function attachSourceSegmentIds(
+  clusters: MessageClusterWithSubtopics[],
+  opinions: ExtractedOpinion[]
+): MessageClusterWithSubtopics[] {
+  const opinionMap = new Map(opinions.map((op) => [op.id, op]));
+
+  return clusters.map((cluster) => ({
+    ...cluster,
+    opinions: cluster.opinions.map((op) => {
+      const segmentIds = new Set<string>();
+      for (const msgId of op.supportingMessages) {
+        const extracted = opinionMap.get(msgId);
+        if (extracted) {
+          segmentIds.add(extracted.source.segmentId);
+        }
+      }
+      return {
+        ...op,
+        sourceSegmentIds: segmentIds.size > 0 ? Array.from(segmentIds) : undefined,
+      };
+    }),
+  }));
 }

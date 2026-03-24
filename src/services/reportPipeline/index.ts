@@ -34,7 +34,7 @@ import { synthesizeReport } from "./synthesizer";
 import { generateVisualizationData } from "./visualizer";
 import { generateDotGridData } from "./dotGridGenerator";
 import { renderMarkdown } from "./renderer";
-import { opinionsToParsedMessages, toCategorizedEmbedded } from "./pipelineUtils";
+import { opinionsToParsedMessages, toCategorizedEmbedded, attachSourceSegmentIds } from "./pipelineUtils";
 import {
   Report,
   ReportRequestParams,
@@ -368,16 +368,28 @@ async function runSharedPipeline(opts: {
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
-  const groundingResult = await groundOpinions(analyzedClusters, apiUrl, model);
+  let groundingResult = await groundOpinions(analyzedClusters, apiUrl, model);
   console.log(`[ReportPipeline] Grounded opinions in ${groundingResult.clusters.length} clusters`);
+
+  // Attach source segment IDs if conversation pipeline (EPIC1)
+  if (extractedOpinions) {
+    groundingResult = {
+      ...groundingResult,
+      clusters: attachSourceSegmentIds(groundingResult.clusters, extractedOpinions),
+    };
+  }
 
   // Calculate statistics
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
+  const deliberation = extractedOpinions
+    ? { totalOpinions: extractedOpinions.length, evolvedCount: extractedOpinions.filter((op) => op.evolved).length }
+    : undefined;
   const analyzerResult = analyzeData(
     substantiveMessages, groundingResult.clusters, threadCount,
-    totalMessagesBeforeSampling, false, nonSubstantiveCount, filteringBreakdown
+    totalMessagesBeforeSampling, false, nonSubstantiveCount, filteringBreakdown,
+    deliberation
   );
 
   // Synthesize insights

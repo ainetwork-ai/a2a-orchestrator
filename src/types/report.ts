@@ -90,6 +90,11 @@ export interface ReportStatistics {
   // Filtering info
   nonSubstantiveCount: number; // Messages filtered out (greetings, chitchat)
   filteringBreakdown?: FilteringBreakdown; // Detailed filtering reasons
+  // EPIC1: Deliberation data (conversation pipeline only)
+  deliberation?: {
+    totalOpinions: number;
+    evolvedCount: number;
+  };
 }
 
 export interface ReportSynthesis {
@@ -308,6 +313,9 @@ export interface Opinion {
   mentionCount: number;            // Count of supporting messages (= supportingMessages.length)
   representativeQuote?: string;    // Best single example quote
   confidence?: number;             // 0-1, how well supported
+
+  // EPIC1: Conversation segment traceability
+  sourceSegmentIds?: string[];     // Conversation segment IDs backing this opinion
 }
 
 /**
