@@ -134,6 +134,7 @@ router.post("/", async (req: Request, res: Response) => {
       title,
       description,
       tags,
+      pipelineMode,
     } = req.body;
 
     // Validation
@@ -184,6 +185,8 @@ router.post("/", async (req: Request, res: Response) => {
       title,
       description,
       tags,
+      // EPIC1: Pipeline mode
+      pipelineMode,
     };
 
     const reportService = ReportService.getInstance();

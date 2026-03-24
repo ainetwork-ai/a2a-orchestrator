@@ -10,7 +10,8 @@ export function analyzeData(
   totalMessagesBeforeSampling: number,
   wasSampled: boolean,
   nonSubstantiveCount: number,
-  filteringBreakdown?: FilteringBreakdown
+  filteringBreakdown?: FilteringBreakdown,
+  deliberation?: { totalOpinions: number; evolvedCount: number }
 ): AnalyzerResult {
   const statistics: ReportStatistics = {
     totalMessages: messages.length,
@@ -24,6 +25,7 @@ export function analyzeData(
     wasSampled,
     nonSubstantiveCount,
     filteringBreakdown,
+    deliberation,
   };
 
   return { statistics };

@@ -90,6 +90,11 @@ export interface ReportStatistics {
   // Filtering info
   nonSubstantiveCount: number; // Messages filtered out (greetings, chitchat)
   filteringBreakdown?: FilteringBreakdown; // Detailed filtering reasons
+  // EPIC1: Deliberation data (conversation pipeline only)
+  deliberation?: {
+    totalOpinions: number;
+    evolvedCount: number;
+  };
 }
 
 export interface ReportSynthesis {
@@ -109,6 +114,9 @@ export interface Report {
   visualization?: VisualizationData; // T3C-style visualization data
   dotGrid?: DotGridVisualization;  // TRD 13: Dot grid visualization data
   markdown: string;
+  // EPIC1: Conversation-aware opinion extraction
+  extractedOpinions?: ExtractedOpinion[];
+  conversationSegments?: ConversationSegment[];
 }
 
 // Job related types
@@ -155,6 +163,9 @@ export interface ReportRequestParams {
   title?: string; // Report title
   description?: string; // Report description
   tags?: string[]; // Tags for filtering/searching
+
+  // EPIC1: Pipeline mode
+  pipelineMode?: "legacy" | "conversation"; // default: "legacy"
 }
 
 // ============================================
@@ -302,6 +313,9 @@ export interface Opinion {
   mentionCount: number;            // Count of supporting messages (= supportingMessages.length)
   representativeQuote?: string;    // Best single example quote
   confidence?: number;             // 0-1, how well supported
+
+  // EPIC1: Conversation segment traceability
+  sourceSegmentIds?: string[];     // Conversation segment IDs backing this opinion
 }
 
 /**
@@ -480,6 +494,9 @@ export interface T3CReport {
   synthesis?: ReportSynthesis;
   topics: Topic[];
   visualization: VisualizationData;
+  // EPIC1: Conversation-aware opinion extraction
+  extractedOpinions?: ExtractedOpinion[];
+  conversationSegments?: ConversationSegment[];
   dotGrid?: DotGridVisualization;  // TRD 13: Dot grid visualization
   markdown?: string;
 }
@@ -499,4 +516,72 @@ export interface ValidationResult {
   isValid: boolean;
   errors: string[];
   warnings: string[];
+}
+
+// ============================================
+// EPIC1: Conversation-Aware Opinion Extraction
+// ============================================
+
+/**
+ * A single message within a conversation segment
+ */
+export interface SegmentMessage {
+  id: string;
+  speaker: string;               // "User" | agent name
+  content: string;
+  timestamp: number;
+  isUser: boolean;
+}
+
+/**
+ * A segment of conversation (topic-coherent block of messages)
+ */
+export interface ConversationSegment {
+  id: string;                    // segment unique ID
+  threadId: string;              // source thread ID
+  messages: SegmentMessage[];    // user + agent messages in sequence
+  startTimestamp: number;
+  endTimestamp: number;
+}
+
+/**
+ * Result of conversation parsing
+ */
+export interface ConversationParserResult {
+  segments: ConversationSegment[];
+  threadCount: number;
+  totalMessages: number;         // total user + agent messages
+}
+
+/**
+ * Source reference linking an extracted opinion to its conversation segment
+ */
+export interface OpinionSource {
+  segmentId: string;              // source segment ID (segment stored separately)
+  keyMessageIds: string[];        // message IDs that are the basis for this opinion
+}
+
+/**
+ * A structured opinion extracted from a conversation segment by LLM
+ */
+export interface ExtractedOpinion {
+  id: string;
+  statement: string;              // self-contained opinion sentence
+  stance: "support" | "oppose" | "neutral" | "request" | "question";
+  confidence: number;             // 0.0~1.0 how firm the opinion is
+  evolved: boolean;               // whether opinion changed during conversation
+  source: OpinionSource;          // traceability to original conversation
+  timestamp: number;              // when the opinion was expressed
+  threadId: string;
+}
+
+/**
+ * Result of opinion extraction from conversation segments
+ */
+export interface OpinionExtractionResult {
+  opinions: ExtractedOpinion[];
+  totalSegmentsProcessed: number;
+  emptySegments: number;          // segments with no extractable opinions
+  failedSegments: number;         // segments where LLM extraction failed
+  evolvedOpinionCount: number;
 }
