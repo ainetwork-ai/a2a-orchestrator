@@ -44,7 +44,7 @@ export async function synthesizeReport(
   }));
 
   const langInstruction = language === "ko"
-    ? "IMPORTANT: Write ALL text content in Korean."
+    ? "CRITICAL: You MUST write ALL text content in Korean (한국어). Even if the input is in English, your output MUST be in Korean. Do NOT write any text in English."
     : "Write all text content in English.";
 
   const prompt = `You are analyzing user feedback for a product/service. Synthesize the following topic analyses into an executive summary.

@@ -106,7 +106,7 @@ export function truncate(text: string, maxLength: number): string {
  */
 export function getLangInstruction(language: ReportLanguage, subject: string = "text content"): string {
   return language === "ko"
-    ? `IMPORTANT: Write ALL ${subject} in Korean.`
+    ? `CRITICAL: You MUST write ALL ${subject} in Korean (한국어). Even if the conversation is in English, your output MUST be in Korean. Do NOT write any ${subject} in English.`
     : `Write all ${subject} in English.`;
 }
 

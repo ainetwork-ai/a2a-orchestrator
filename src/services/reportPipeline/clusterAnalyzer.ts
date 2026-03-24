@@ -142,7 +142,7 @@ async function analyzeCluster(
   // Build prompt
   const langInstruction =
     language === "ko"
-      ? "IMPORTANT: Write ALL text content in Korean."
+      ? "CRITICAL: You MUST write ALL text content in Korean (한국어). Even if the input messages are in English, your output MUST be in Korean. Do NOT write any text in English."
       : "Write all text content in English.";
 
   const prompt = `You are analyzing a cluster of user feedback messages.
@@ -324,7 +324,7 @@ async function labelSubtopics(
 
   const langInstruction =
     language === "ko"
-      ? "IMPORTANT: Write ALL labels in Korean."
+      ? "CRITICAL: You MUST write ALL labels in Korean (한국어). Even if the input is in English, your output MUST be in Korean. Do NOT write any labels in English."
       : "Write all labels in English.";
 
   const prompt = `You are analyzing subtopics within a topic cluster.
