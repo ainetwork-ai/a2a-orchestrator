@@ -9,10 +9,9 @@ import {
   ReportLanguage,
   ParsedMessage,
   ExtractedOpinion,
-  MessageClusterWithSubtopics,
   DEFAULT_DATE_RANGE_DAYS,
 } from "../../types/report";
-import { EmbeddedMessage, CategorizedEmbeddedMessage } from "../../types/embedding";
+import { EmbeddedMessage } from "../../types/embedding";
 
 /**
  * Filter threads by request params (threadIds, agentUrls, agentNames)
@@ -122,61 +121,3 @@ export function opinionsToParsedMessages(opinions: ExtractedOpinion[]): ParsedMe
   }));
 }
 
-const STANCE_TO_SENTIMENT: Record<ExtractedOpinion["stance"], "positive" | "negative" | "neutral"> = {
-  support: "positive",
-  oppose: "negative",
-  neutral: "neutral",
-  request: "neutral",
-  question: "neutral",
-};
-
-/**
- * Wrap EmbeddedMessages as CategorizedEmbeddedMessages using ExtractedOpinion metadata.
- * This allows the existing clusterer (which expects CategorizedEmbeddedMessage[]) to work
- * without modification, and populates category/sentiment for downstream stats.
- */
-export function toCategorizedEmbedded(
-  embeddedMessages: EmbeddedMessage[],
-  opinions: ExtractedOpinion[]
-): CategorizedEmbeddedMessage[] {
-  const opinionMap = new Map(opinions.map((op) => [op.id, op]));
-
-  return embeddedMessages.map((em) => {
-    const opinion = opinionMap.get(em.id);
-    const stance = opinion?.stance || "neutral";
-    return {
-      ...em,
-      category: stance,
-      sentiment: STANCE_TO_SENTIMENT[stance],
-      isSubstantive: true,
-    };
-  });
-}
-
-/**
- * Post-process grounded clusters to attach sourceSegmentIds.
- * Links Opinion.supportingMessages (ExtractedOpinion IDs) → ExtractedOpinion.source.segmentId.
- */
-export function attachSourceSegmentIds(
-  clusters: MessageClusterWithSubtopics[],
-  opinions: ExtractedOpinion[]
-): MessageClusterWithSubtopics[] {
-  const opinionMap = new Map(opinions.map((op) => [op.id, op]));
-
-  return clusters.map((cluster) => ({
-    ...cluster,
-    opinions: cluster.opinions.map((op) => {
-      const segmentIds = new Set<string>();
-      for (const msgId of op.supportingMessages) {
-        const extracted = opinionMap.get(msgId);
-        if (extracted) {
-          segmentIds.add(extracted.source.segmentId);
-        }
-      }
-      return {
-        ...op,
-        sourceSegmentIds: segmentIds.size > 0 ? Array.from(segmentIds) : undefined,
-      };
-    }),
-  }));
-}

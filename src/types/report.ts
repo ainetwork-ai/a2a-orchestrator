@@ -33,63 +33,27 @@ export interface MessageCluster {
   id: string;
   topic: string;
   description: string;
-  messages: CategorizedMessage[];
-  opinions: Opinion[]; // Grounded opinions with supporting messages (TRD 05)
+  messages: ParsedMessage[];
+  opinions: Opinion[];
   summary: ClusterSummary;
   nextSteps: ActionItem[];
 }
 
-// ============================================
-// TRD 13: Subtopic Types for Dot Grid
-// ============================================
-
-/**
- * Subtopic within a topic cluster (TRD 13)
- */
-export interface Subtopic {
-  id: string;
-  index: number;              // Order index for frontend color generation
-  label: string;              // LLM-generated label
-  messageIds: string[];       // IDs of messages in this subtopic
-  messageCount: number;
-  uniqueUserCount: number;    // Unique users (based on threadId)
-  centroid?: {                // Center point in UMAP space
-    x: number;
-    y: number;
-  };
-}
-
-/**
- * Extended MessageCluster with subtopics (TRD 13)
- */
-export interface MessageClusterWithSubtopics extends MessageCluster {
-  subtopics: Subtopic[];
-  uniqueUserCount: number;    // Unique users in the entire topic
-}
 
 export interface ReportStatistics {
-  totalMessages: number;
+  totalOpinions: number;
   totalThreads: number;
   dateRange: {
     start: number;
     end: number;
   };
-  categoryDistribution: Record<string, number>;
-  sentimentDistribution: Record<string, number>;
+  stanceDistribution: Record<string, number>;
   topTopics: Array<{
     topic: string;
     count: number;
     percentage: number;
   }>;
-  averageMessagesPerThread: number;
-  // Sampling info
-  totalMessagesBeforeSampling: number;
-  wasSampled: boolean;
-  // Filtering info
-  nonSubstantiveCount: number; // Messages filtered out (greetings, chitchat)
-  filteringBreakdown?: FilteringBreakdown; // Detailed filtering reasons
-  // EPIC1: Deliberation data (conversation pipeline only)
-  deliberation?: {
+  deliberation: {
     totalOpinions: number;
     evolvedCount: number;
   };
@@ -107,7 +71,7 @@ export interface Report {
   title: string;
   createdAt: number;
   statistics: ReportStatistics;
-  clusters: MessageClusterWithSubtopics[];
+  clusters: MessageCluster[];
   synthesis?: ReportSynthesis;
   // EPIC1: Conversation-aware opinion extraction
   extractedOpinions?: ExtractedOpinion[];
@@ -275,14 +239,6 @@ export interface AnalyzerResult {
 
 export interface SynthesizerResult {
   synthesis: ReportSynthesis;
-}
-
-/**
- * Grounding pipeline step result (TRD 05)
- */
-export interface GroundingResult {
-  clusters: MessageClusterWithSubtopics[];  // Clusters with grounded opinions (TRD 13: includes subtopics)
-  performanceMs?: number;      // Time taken for grounding step
 }
 
 // ============================================

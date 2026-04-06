@@ -18,12 +18,10 @@ import { parseConversations } from "./conversationParser";
 import { extractOpinions } from "./opinionExtractor";
 import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
 import { clusterByEmbedding } from "./clusterer";
-import { addSubtopicsToAllClusters } from "./subtopicClusterer";
 import { analyzeClusters } from "./clusterAnalyzer";
 import { analyzeData } from "./analyzer";
-import { groundOpinions } from "./grounding";
 import { synthesizeReport } from "./synthesizer";
-import { opinionsToParsedMessages, toCategorizedEmbedded, attachSourceSegmentIds } from "./pipelineUtils";
+import { opinionsToParsedMessages } from "./pipelineUtils";
 import {
   Report,
   ReportRequestParams,
@@ -32,7 +30,7 @@ import {
   type ConversationSegment,
   type ExtractedOpinion,
 } from "../../types/report";
-import { EmbedFunction, CategorizedEmbeddedMessage } from "../../types/embedding";
+import { EmbedFunction, EmbeddedMessage } from "../../types/embedding";
 import { validateReportMessages, validateStatistics } from "../../utils/reportValidator";
 
 export type ProgressCallback = (progress: ReportJobProgress) => void;
@@ -45,9 +43,7 @@ const PIPELINE_STEPS = [
   "Extracting opinions",
   "Generating embeddings",
   "Clustering",
-  "Subtopic clustering",
   "Analyzing clusters",
-  "Grounding opinions",
   "Calculating statistics",
   "Synthesizing insights",
 ];
@@ -145,17 +141,11 @@ export async function generateReport(
     `[ReportPipeline] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
   );
 
-  // Adapt to CategorizedEmbeddedMessage (stance → category/sentiment mapping)
-  const categorizedMessages = toCategorizedEmbedded(
-    embeddingResult.messages, extractionResult.opinions
-  );
-
   // Steps 4-9: shared pipeline
   return runSharedPipeline({
     reportId, title, language, params, apiUrl, model,
-    substantiveMessages: categorizedMessages,
+    substantiveMessages: embeddingResult.messages,
     threadCount: conversationResult.threadCount,
-    totalMessagesBeforeSampling: conversationResult.totalMessages,
     onProgress, stepOffset: 3,
     extractedOpinions: extractionResult.opinions,
     conversationSegments: conversationResult.segments,
@@ -188,9 +178,8 @@ async function runSharedPipeline(opts: {
   params: ReportRequestParams;
   apiUrl: string;
   model: string;
-  substantiveMessages: CategorizedEmbeddedMessage[];
+  substantiveMessages: EmbeddedMessage[];
   threadCount: number;
-  totalMessagesBeforeSampling: number;
   onProgress?: ProgressCallback;
   stepOffset: number;
   extractedOpinions?: ExtractedOpinion[];
@@ -198,7 +187,7 @@ async function runSharedPipeline(opts: {
 }): Promise<Report> {
   const {
     reportId, title, language, params, apiUrl, model,
-    substantiveMessages, threadCount, totalMessagesBeforeSampling,
+    substantiveMessages, threadCount,
     stepOffset, extractedOpinions, conversationSegments,
   } = opts;
 
@@ -219,50 +208,42 @@ async function runSharedPipeline(opts: {
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Subtopic clustering
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
-  const clustersWithSubtopics = await addSubtopicsToAllClusters(
-    clustererResult.clusters, substantiveMessages
-  );
-  console.log(`[ReportPipeline] Added subtopics to ${clustersWithSubtopics.length} clusters`);
-
   // Analyze clusters
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const analyzedClusters = await analyzeClusters(
-    clustersWithSubtopics, apiUrl, model, language
+    clustererResult.clusters, apiUrl, model, language
   );
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
-  // Ground opinions
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
-  let groundingResult = await groundOpinions(analyzedClusters, apiUrl, model);
-  console.log(`[ReportPipeline] Grounded opinions in ${groundingResult.clusters.length} clusters`);
-
-  // Attach source segment IDs from extracted opinions
+  // Map ExtractedOpinions to cluster opinions (no LLM needed — already grounded at extraction)
   if (extractedOpinions) {
-    groundingResult = {
-      ...groundingResult,
-      clusters: attachSourceSegmentIds(groundingResult.clusters, extractedOpinions),
-    };
+    const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
+    for (const cluster of analyzedClusters) {
+      cluster.opinions = cluster.messages
+        .filter((m) => opinionMap.has(m.id))
+        .map((m) => {
+          const op = opinionMap.get(m.id)!;
+          return {
+            id: op.id,
+            text: op.statement,
+            type: "general" as const,
+            supportingMessages: op.source.keyMessageIds,
+            mentionCount: op.source.keyMessageIds.length,
+            confidence: op.confidence,
+            sourceSegmentIds: [op.source.segmentId],
+          };
+        });
+    }
   }
 
   // Calculate statistics
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
-  const deliberation = extractedOpinions
-    ? { totalOpinions: extractedOpinions.length, evolvedCount: extractedOpinions.filter((op) => op.evolved).length }
-    : undefined;
   const analyzerResult = analyzeData(
-    substantiveMessages, groundingResult.clusters, threadCount,
-    totalMessagesBeforeSampling, false, 0, undefined,
-    deliberation
+    extractedOpinions || [], analyzedClusters, threadCount
   );
 
   // Synthesize insights
@@ -270,7 +251,7 @@ async function runSharedPipeline(opts: {
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const synthesizerResult = await synthesizeReport(
-    groundingResult.clusters, analyzerResult.statistics, apiUrl, model, language
+    analyzedClusters, analyzerResult.statistics, apiUrl, model, language
   );
   console.log(
     `[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`
@@ -282,7 +263,7 @@ async function runSharedPipeline(opts: {
     title,
     createdAt: Date.now(),
     statistics: analyzerResult.statistics,
-    clusters: groundingResult.clusters,
+    clusters: analyzedClusters,
     synthesis: synthesizerResult.synthesis,
     ...(extractedOpinions && { extractedOpinions }),
     ...(conversationSegments && { conversationSegments }),
@@ -307,7 +288,7 @@ async function runSharedPipeline(opts: {
 
   console.log(
     `[ReportPipeline] Validation passed: ${report.clusters.length} clusters, ` +
-    `${report.statistics.totalMessages} messages`
+    `${report.statistics.totalOpinions} opinions`
   );
   console.log(`[ReportPipeline] Report generation completed`);
   return report;
@@ -326,16 +307,12 @@ function createEmptyReport(
     title,
     createdAt: Date.now(),
     statistics: {
-      totalMessages: 0,
+      totalOpinions: 0,
       totalThreads: threadCount,
       dateRange: { start: Date.now(), end: Date.now() },
-      categoryDistribution: {},
-      sentimentDistribution: { positive: 0, negative: 0, neutral: 0 },
+      stanceDistribution: {},
       topTopics: [],
-      averageMessagesPerThread: 0,
-      totalMessagesBeforeSampling: 0,
-      wasSampled: false,
-      nonSubstantiveCount: 0,
+      deliberation: { totalOpinions: 0, evolvedCount: 0 },
     },
     clusters: [],
   };
@@ -346,8 +323,6 @@ export { parseConversations } from "./conversationParser";
 export { extractOpinions } from "./opinionExtractor";
 export { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder } from "./embedder";
 export { clusterByEmbedding, kMeans } from "./clusterer";
-export { addSubtopicsToAllClusters, clusterSubtopics, countUniqueUsers } from "./subtopicClusterer";
 export { analyzeClusters } from "./clusterAnalyzer";
-export { groundOpinions } from "./grounding";
 export { synthesizeReport } from "./synthesizer";
 export { analyzeData } from "./analyzer";

@@ -6,9 +6,9 @@
  */
 
 import { UMAP } from "umap-js";
-import { MessageCluster, CategorizedMessage } from "../../types/report";
+import { MessageCluster } from "../../types/report";
 import {
-  CategorizedEmbeddedMessage,
+  EmbeddedMessage,
   ClustererVisualization,
   EmbeddingClustererResult,
 } from "../../types/embedding";
@@ -34,7 +34,7 @@ const CLUSTER_CONFIG = {
  * @returns Clusters with visualization data
  */
 export async function clusterByEmbedding(
-  messages: CategorizedEmbeddedMessage[],
+  messages: EmbeddedMessage[],
   numClusters: number = CLUSTER_CONFIG.defaultNumClusters
 ): Promise<EmbeddingClustererResult> {
   console.log(`[Clusterer] Starting clustering: ${messages.length} messages, target ${numClusters} clusters`);
@@ -74,7 +74,7 @@ export async function clusterByEmbedding(
   const clusterAssignments = kMeans(reduced, effectiveNumClusters);
 
   // 3. Group messages by cluster
-  const clusterMap = new Map<number, Array<CategorizedEmbeddedMessage & { x: number; y: number }>>();
+  const clusterMap = new Map<number, Array<EmbeddedMessage & { x: number; y: number }>>();
 
   messages.forEach((msg, i) => {
     const clusterId = clusterAssignments[i];
@@ -103,7 +103,7 @@ export async function clusterByEmbedding(
       summary: {
         consensus: [],
         conflicting: [],
-        sentiment: calculateClusterSentiment(msgs),
+        sentiment: "neutral",
       },
       nextSteps: [], // ClusterAnalyzer will populate
     }));
@@ -204,36 +204,10 @@ function arraysEqual(a: number[], b: number[]): boolean {
 }
 
 /**
- * Calculate overall sentiment for a cluster
- */
-function calculateClusterSentiment(
-  messages: CategorizedMessage[]
-): "positive" | "negative" | "mixed" | "neutral" {
-  const counts = { positive: 0, negative: 0, neutral: 0 };
-
-  messages.forEach((m) => {
-    const sentiment = m.sentiment || "neutral";
-    counts[sentiment]++;
-  });
-
-  const total = messages.length;
-  if (total === 0) return "neutral";
-
-  const positiveRatio = counts.positive / total;
-  const negativeRatio = counts.negative / total;
-
-  if (positiveRatio > 0.6) return "positive";
-  if (negativeRatio > 0.6) return "negative";
-  if (counts.positive > 0 && counts.negative > 0) return "mixed";
-
-  return "neutral";
-}
-
-/**
  * Create a single cluster for small datasets
  */
 function createSingleCluster(
-  messages: CategorizedEmbeddedMessage[]
+  messages: EmbeddedMessage[]
 ): EmbeddingClustererResult {
   const cluster: MessageCluster = {
     id: "cluster-0",
@@ -244,7 +218,7 @@ function createSingleCluster(
     summary: {
       consensus: [],
       conflicting: [],
-      sentiment: calculateClusterSentiment(messages),
+      sentiment: "neutral",
     },
     nextSteps: [],
   };

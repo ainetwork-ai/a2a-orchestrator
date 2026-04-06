@@ -52,9 +52,9 @@ export async function synthesizeReport(
 ${langInstruction}
 
 Overall Statistics:
-- Total messages analyzed: ${statistics.totalMessages}
+- Total opinions extracted: ${statistics.totalOpinions}
 - Total threads: ${statistics.totalThreads}
-- Sentiment distribution: ${JSON.stringify(statistics.sentimentDistribution)}
+- Stance distribution: ${JSON.stringify(statistics.stanceDistribution)}
 
 Topic Analyses:
 ${JSON.stringify(clusterSummaries, null, 2)}
