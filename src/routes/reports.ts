@@ -438,40 +438,4 @@ router.delete("/:jobId", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * DELETE /api/reports/cache
- * Invalidate report cache
- *
- * Body:
- * - threadIds?: string[] - Specific params to invalidate (optional, all if empty)
- */
-router.delete("/cache", async (req: Request, res: Response) => {
-  try {
-    const { threadIds, startDate, endDate } = req.body;
-
-    const params: ReportRequestParams | undefined =
-      threadIds || startDate || endDate
-        ? {
-            threadIds: threadIds || undefined,
-            startDate: startDate || undefined,
-            endDate: endDate || undefined,
-          }
-        : undefined;
-
-    const reportService = ReportService.getInstance();
-    await reportService.invalidateCache(params);
-
-    res.json({
-      success: true,
-      message: params ? "Specific cache invalidated" : "All cache invalidated",
-    });
-  } catch (error: any) {
-    console.error("Error invalidating cache:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Internal server error",
-    });
-  }
-});
-
 export default router;
