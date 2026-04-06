@@ -3,35 +3,9 @@ import ReportService from "../services/reportService";
 import {
   ReportRequestParams,
   ReportJobQuery,
-  VisualizationData,
 } from "../types/report";
-import {
-  transformToT3CFormat,
-  extractTopicsSummary,
-  extractStatistics,
-} from "../utils/reportTransformer";
 
 const router = Router();
-
-/**
- * Create default visualization data for fallback
- */
-function createDefaultVisualization(): VisualizationData {
-  return {
-    scatterPlot: {
-      points: [],
-      axes: {
-        x: { label: "Sentiment", min: -1, max: 1 },
-        y: { label: "Priority", min: 0, max: 1 },
-      },
-    },
-    topicTree: {
-      nodes: [],
-      links: [],
-    },
-    charts: {},
-  };
-}
 
 /**
  * GET /api/reports
@@ -134,7 +108,6 @@ router.post("/", async (req: Request, res: Response) => {
       title,
       description,
       tags,
-      pipelineMode,
     } = req.body;
 
     // Validation
@@ -185,8 +158,6 @@ router.post("/", async (req: Request, res: Response) => {
       title,
       description,
       tags,
-      // EPIC1: Pipeline mode
-      pipelineMode,
     };
 
     const reportService = ReportService.getInstance();
@@ -218,33 +189,24 @@ router.post("/", async (req: Request, res: Response) => {
  * Get report job status and result
  *
  * Query Parameters:
- * - format: "json" (default) | "markdown" | "full"
- * - includeMessages: "true" (default) | "false"
+ * - includeMessages: "true" (default) | "false" - include messages in clusters
+ * - fields: comma-separated field names (e.g., "statistics,synthesis") - return partial report
  *
  * Response:
  * - status: "pending" | "processing" | "completed" | "failed"
  * - progress?: { step, totalSteps, currentStep, percentage }
- * - report?: T3CReport | { markdown: string } - Available when status is "completed"
+ * - report?: Report | partial Report - Available when status is "completed"
  * - error?: string - Available when status is "failed"
  */
 router.get("/:jobId", async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
-    const format = (req.query.format as string) || "json";
     const includeMessages = req.query.includeMessages !== "false";
 
     if (!jobId || typeof jobId !== "string") {
       return res.status(400).json({
         success: false,
         error: "Valid jobId is required",
-      });
-    }
-
-    // Validate format parameter
-    if (!["json", "markdown", "full"].includes(format)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid format. Must be: json, markdown, or full",
       });
     }
 
@@ -268,271 +230,53 @@ router.get("/:jobId", async (req: Request, res: Response) => {
         error: job.error,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
-        // Metadata (TRD 06)
         title: job.title,
         description: job.description,
         tags: job.tags,
       });
     }
 
-    // Format response based on requested format
-    switch (format) {
-      case "markdown":
-        return res.json({
-          success: true,
-          jobId: job.id,
-          status: job.status,
-          markdown: job.report.markdown,
-          createdAt: job.createdAt,
-          updatedAt: job.updatedAt,
-          cachedAt: job.cachedAt,
-          // Metadata (TRD 06)
-          title: job.title,
-          description: job.description,
-          tags: job.tags,
-        });
+    // Strip messages from clusters if not requested
+    const fullReport = includeMessages
+      ? job.report
+      : {
+          ...job.report,
+          clusters: job.report.clusters.map((c) => ({ ...c, messages: [] })),
+        };
 
-      case "full": {
-        // Include both JSON and markdown
-        const fullReport = transformToT3CFormat(job.report, job, includeMessages);
-        fullReport.markdown = job.report.markdown;
-        return res.json({
-          success: true,
-          jobId: job.id,
-          status: job.status,
-          report: fullReport,
-          createdAt: job.createdAt,
-          updatedAt: job.updatedAt,
-          cachedAt: job.cachedAt,
-          // Metadata (TRD 06)
-          title: job.title,
-          description: job.description,
-          tags: job.tags,
-        });
-      }
+    // Support ?fields=statistics,synthesis to return partial data
+    const fieldsParam = req.query.fields as string | undefined;
+    let report: unknown = fullReport;
 
-      case "json":
-      default: {
-        // New T3C format (without markdown by default)
-        const t3cReport = transformToT3CFormat(job.report, job, includeMessages);
-        return res.json({
-          success: true,
-          jobId: job.id,
-          status: job.status,
-          report: t3cReport,
-          createdAt: job.createdAt,
-          updatedAt: job.updatedAt,
-          cachedAt: job.cachedAt,
-          // Metadata (TRD 06)
-          title: job.title,
-          description: job.description,
-          tags: job.tags,
-        });
+    if (fieldsParam) {
+      const requestedFields = fieldsParam.split(",").map((f) => f.trim());
+      const reportObj = fullReport as unknown as Record<string, unknown>;
+      const partial: Record<string, unknown> = {};
+      for (const field of requestedFields) {
+        if (Object.prototype.hasOwnProperty.call(reportObj, field)) {
+          partial[field] = reportObj[field];
+        }
       }
+      report = partial;
     }
-  } catch (error: any) {
+
+    return res.json({
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      report,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      cachedAt: job.cachedAt,
+      title: job.title,
+      description: job.description,
+      tags: job.tags,
+    });
+  } catch (error: unknown) {
     console.error("Error getting report job:", error);
     res.status(500).json({
       success: false,
-      error: error.message || "Internal server error",
-    });
-  }
-});
-
-/**
- * GET /api/reports/:jobId/markdown
- * Get only the markdown content of a completed report
- *
- * Response: Plain text markdown
- */
-router.get("/:jobId/markdown", async (req: Request, res: Response) => {
-  try {
-    const { jobId } = req.params;
-
-    if (!jobId || typeof jobId !== "string") {
-      return res.status(400).json({
-        success: false,
-        error: "Valid jobId is required",
-      });
-    }
-
-    const reportService = ReportService.getInstance();
-    const job = await reportService.getJob(jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        success: false,
-        error: "Job not found",
-      });
-    }
-
-    if (job.status !== "completed" || !job.report) {
-      return res.status(400).json({
-        success: false,
-        error: "Report not yet completed",
-        status: job.status,
-      });
-    }
-
-    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-    res.send(job.report.markdown);
-  } catch (error: any) {
-    console.error("Error getting report markdown:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Internal server error",
-    });
-  }
-});
-
-/**
- * GET /api/reports/:jobId/topics
- * Get only topics data (lightweight endpoint)
- *
- * Response: { topics: TopicSummary[] }
- */
-router.get("/:jobId/topics", async (req: Request, res: Response) => {
-  try {
-    const { jobId } = req.params;
-
-    if (!jobId || typeof jobId !== "string") {
-      return res.status(400).json({
-        success: false,
-        error: "Valid jobId is required",
-      });
-    }
-
-    const reportService = ReportService.getInstance();
-    const job = await reportService.getJob(jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        success: false,
-        error: "Job not found",
-      });
-    }
-
-    if (job.status !== "completed" || !job.report) {
-      return res.status(400).json({
-        success: false,
-        error: "Report not yet completed",
-        status: job.status,
-      });
-    }
-
-    const topics = extractTopicsSummary(job.report);
-
-    res.json({
-      success: true,
-      jobId,
-      topics,
-    });
-  } catch (error: any) {
-    console.error("Error getting topics:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Internal server error",
-    });
-  }
-});
-
-/**
- * GET /api/reports/:jobId/visualization
- * Get only visualization data
- *
- * Response: { visualization: VisualizationData }
- */
-router.get("/:jobId/visualization", async (req: Request, res: Response) => {
-  try {
-    const { jobId } = req.params;
-
-    if (!jobId || typeof jobId !== "string") {
-      return res.status(400).json({
-        success: false,
-        error: "Valid jobId is required",
-      });
-    }
-
-    const reportService = ReportService.getInstance();
-    const job = await reportService.getJob(jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        success: false,
-        error: "Job not found",
-      });
-    }
-
-    if (job.status !== "completed" || !job.report) {
-      return res.status(400).json({
-        success: false,
-        error: "Report not yet completed",
-        status: job.status,
-      });
-    }
-
-    res.json({
-      success: true,
-      jobId,
-      visualization: job.report.visualization || createDefaultVisualization(),
-    });
-  } catch (error: any) {
-    console.error("Error getting visualization:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Internal server error",
-    });
-  }
-});
-
-/**
- * GET /api/reports/:jobId/statistics
- * Get only statistics and synthesis data
- *
- * Response: { statistics: ReportStatistics, synthesis: ReportSynthesis }
- */
-router.get("/:jobId/statistics", async (req: Request, res: Response) => {
-  try {
-    const { jobId } = req.params;
-
-    if (!jobId || typeof jobId !== "string") {
-      return res.status(400).json({
-        success: false,
-        error: "Valid jobId is required",
-      });
-    }
-
-    const reportService = ReportService.getInstance();
-    const job = await reportService.getJob(jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        success: false,
-        error: "Job not found",
-      });
-    }
-
-    if (job.status !== "completed" || !job.report) {
-      return res.status(400).json({
-        success: false,
-        error: "Report not yet completed",
-        status: job.status,
-      });
-    }
-
-    const { statistics, synthesis } = extractStatistics(job.report);
-
-    res.json({
-      success: true,
-      jobId,
-      statistics,
-      synthesis,
-    });
-  } catch (error: any) {
-    console.error("Error getting statistics:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Internal server error",
+      error: error instanceof Error ? error.message : "Internal server error",
     });
   }
 });
@@ -608,6 +352,43 @@ router.patch("/:jobId", async (req: Request, res: Response) => {
     });
   } catch (error: unknown) {
     console.error("Error updating report job:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Internal server error",
+    });
+  }
+});
+
+/**
+ * DELETE /api/reports/cache
+ * Invalidate report cache
+ * Must be registered before /:jobId to avoid "cache" matching as a jobId param.
+ *
+ * Body:
+ * - threadIds?: string[] - Specific params to invalidate (optional, all if empty)
+ */
+router.delete("/cache", async (req: Request, res: Response) => {
+  try {
+    const { threadIds, startDate, endDate } = req.body;
+
+    const params: ReportRequestParams | undefined =
+      threadIds || startDate || endDate
+        ? {
+            threadIds: threadIds || undefined,
+            startDate: startDate || undefined,
+            endDate: endDate || undefined,
+          }
+        : undefined;
+
+    const reportService = ReportService.getInstance();
+    await reportService.invalidateCache(params);
+
+    res.json({
+      success: true,
+      message: params ? "Specific cache invalidated" : "All cache invalidated",
+    });
+  } catch (error: unknown) {
+    console.error("Error invalidating cache:", error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : "Internal server error",

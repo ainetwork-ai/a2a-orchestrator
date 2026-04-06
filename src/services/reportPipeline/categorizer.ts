@@ -333,6 +333,3 @@ export async function categorizeEmbeddedMessages(
     filteringBreakdown,
   };
 }
-
-// Re-export legacy function for backward compatibility during transition
-export { categorizeMessages } from "./categorizer.legacy";

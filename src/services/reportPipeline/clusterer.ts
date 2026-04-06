@@ -260,6 +260,3 @@ function createSingleCluster(
 
   return { clusters: [cluster], visualization };
 }
-
-// Re-export legacy function for backward compatibility during transition
-export { clusterMessages } from "./clusterer.legacy";

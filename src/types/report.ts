@@ -1,7 +1,5 @@
 // Report related types
 
-import { DotGridVisualization } from "./visualization";
-
 export interface ParsedMessage {
   id: string;
   threadId: string;  // Thread ID for unique user count (TRD 13)
@@ -109,11 +107,8 @@ export interface Report {
   title: string;
   createdAt: number;
   statistics: ReportStatistics;
-  clusters: MessageClusterWithSubtopics[];  // TRD 13: Now includes subtopics
-  synthesis?: ReportSynthesis;     // Total summary across all clusters
-  visualization?: VisualizationData; // T3C-style visualization data
-  dotGrid?: DotGridVisualization;  // TRD 13: Dot grid visualization data
-  markdown: string;
+  clusters: MessageClusterWithSubtopics[];
+  synthesis?: ReportSynthesis;
   // EPIC1: Conversation-aware opinion extraction
   extractedOpinions?: ExtractedOpinion[];
   conversationSegments?: ConversationSegment[];
@@ -164,8 +159,6 @@ export interface ReportRequestParams {
   description?: string; // Report description
   tags?: string[]; // Tags for filtering/searching
 
-  // EPIC1: Pipeline mode
-  pipelineMode?: "legacy" | "conversation"; // default: "legacy"
 }
 
 // ============================================
@@ -280,10 +273,6 @@ export interface AnalyzerResult {
   statistics: ReportStatistics;
 }
 
-export interface RendererResult {
-  markdown: string;
-}
-
 export interface SynthesizerResult {
   synthesis: ReportSynthesis;
 }
@@ -318,196 +307,6 @@ export interface Opinion {
   sourceSegmentIds?: string[];     // Conversation segment IDs backing this opinion
 }
 
-/**
- * Message reference in T3C format
- */
-export interface MessageRef {
-  id: string;
-  content: string;
-  timestamp: number;
-  category: string;
-  subCategory?: string;
-  intent?: string;
-  sentiment: "positive" | "negative" | "neutral";
-  isSubstantive: boolean;
-  context?: {
-    threadId?: string;
-  };
-}
-
-/**
- * Topic in T3C report format
- */
-export interface Topic {
-  id: string;
-  name: string;
-  description: string;
-  parentId?: string | null;
-  level: number;
-  messageCount: number;
-  percentage: number;
-  sentiment: {
-    overall: "positive" | "negative" | "mixed" | "neutral";
-    distribution: {
-      positive: number;
-      negative: number;
-      neutral: number;
-    };
-  };
-  opinions: Opinion[];
-  messages: MessageRef[];
-  summary: ClusterSummary;
-  nextSteps: ActionItem[];
-  position?: {
-    x: number;
-    y: number;
-  };
-  // TRD 13: Subtopics for dot grid visualization
-  subtopics?: Subtopic[];
-  uniqueUserCount?: number;
-}
-
-/**
- * Scatter plot point for visualization
- * Note: color is determined by frontend based on type/sentiment/category in metadata
- */
-export interface ScatterPoint {
-  id: string;
-  type: "message" | "topic" | "cluster";
-  x: number;
-  y: number;
-  label: string;
-  size?: number;
-  metadata: {
-    sentiment?: string;
-    category?: string;
-    messageCount?: number;
-    topicId?: string;
-  };
-}
-
-/**
- * Scatter plot data structure
- */
-export interface ScatterPlotData {
-  points: ScatterPoint[];
-  axes: {
-    x: { label: string; min: number; max: number };
-    y: { label: string; min: number; max: number };
-  };
-}
-
-/**
- * Tree node for topic hierarchy
- */
-export interface TreeNode {
-  id: string;
-  label: string;
-  type: "topic" | "subtopic" | "message";
-  parentId?: string;
-  value: number;
-  metadata: Record<string, unknown>;
-}
-
-/**
- * Tree link connecting nodes
- */
-export interface TreeLink {
-  source: string;
-  target: string;
-  weight?: number;
-}
-
-/**
- * Topic tree data structure
- */
-export interface TopicTreeData {
-  nodes: TreeNode[];
-  links: TreeLink[];
-}
-
-/**
- * Chart data for various visualizations
- * Note: colors are determined by frontend based on chart type and label
- */
-export interface ChartData {
-  type: "bar" | "pie" | "line" | "area";
-  data: Array<{
-    label: string;
-    value: number;
-    metadata?: Record<string, unknown>;
-  }>;
-}
-
-/**
- * Complete visualization data for T3C report
- */
-export interface VisualizationData {
-  scatterPlot: ScatterPlotData;
-  topicTree: TopicTreeData;
-  charts: {
-    sentiment?: ChartData;
-    categories?: ChartData;
-    topics?: ChartData;
-    timeline?: ChartData;
-  };
-}
-
-/**
- * Report metadata including processing info and scope
- */
-export interface ReportMetadata {
-  params: ReportRequestParams;
-  processingTime: number;
-  pipelineVersion: string;
-  wasCached: boolean;
-  cachedAt?: number;
-  scope: {
-    totalThreads: number;
-    totalMessages: number;
-    substantiveMessages: number;
-    filteredMessages: number;
-    dateRange: {
-      start: number;
-      end: number;
-    };
-  };
-  filtering?: {
-    totalBeforeFiltering: number;
-    substantiveCount: number;
-    nonSubstantiveCount: number;
-    filteringRate: number;
-    filterReasons?: FilteringBreakdown;
-  };
-}
-
-/**
- * T3C-style report structure
- */
-export interface T3CReport {
-  id: string;
-  title: string;
-  createdAt: number;
-  version: string;
-  metadata: ReportMetadata;
-  statistics: ReportStatistics;
-  synthesis?: ReportSynthesis;
-  topics: Topic[];
-  visualization: VisualizationData;
-  // EPIC1: Conversation-aware opinion extraction
-  extractedOpinions?: ExtractedOpinion[];
-  conversationSegments?: ConversationSegment[];
-  dotGrid?: DotGridVisualization;  // TRD 13: Dot grid visualization
-  markdown?: string;
-}
-
-/**
- * Visualizer pipeline result
- */
-export interface VisualizerResult {
-  visualization: VisualizationData;
-  performanceMs?: number; // Time taken to generate visualization data (TRD 02)
-}
 
 /**
  * Validation result for report data quality
