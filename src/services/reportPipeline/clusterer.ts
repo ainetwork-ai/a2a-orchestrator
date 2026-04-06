@@ -6,12 +6,23 @@
  */
 
 import { UMAP } from "umap-js";
-import { MessageCluster } from "../../types/report";
+import { Topic, ParsedMessage } from "../../types/report";
 import {
   EmbeddedMessage,
   ClustererVisualization,
-  EmbeddingClustererResult,
 } from "../../types/embedding";
+
+/**
+ * Internal Topic with messages — used during pipeline, stripped in final Report
+ */
+export interface PipelineTopic extends Topic {
+  messages: ParsedMessage[];
+}
+
+export interface ClustererResult {
+  clusters: PipelineTopic[];
+  visualization: ClustererVisualization;
+}
 
 /**
  * Default configuration for clustering
@@ -36,7 +47,7 @@ const CLUSTER_CONFIG = {
 export async function clusterByEmbedding(
   messages: EmbeddedMessage[],
   numClusters: number = CLUSTER_CONFIG.defaultNumClusters
-): Promise<EmbeddingClustererResult> {
+): Promise<ClustererResult> {
   console.log(`[Clusterer] Starting clustering: ${messages.length} messages, target ${numClusters} clusters`);
 
   // Handle edge cases
@@ -91,21 +102,21 @@ export async function clusterByEmbedding(
     });
   });
 
-  // 4. Convert to MessageCluster format (labels will be added by ClusterAnalyzer)
-  const clusters: MessageCluster[] = Array.from(clusterMap.entries())
+  // 4. Convert to PipelineTopic format (labels will be added by ClusterAnalyzer)
+  const clusters: PipelineTopic[] = Array.from(clusterMap.entries())
     .filter(([_, msgs]) => msgs.length > 0)
     .map(([clusterId, msgs]) => ({
       id: `cluster-${clusterId}`,
-      topic: `Cluster ${clusterId + 1}`, // Temporary, ClusterAnalyzer will update
+      title: `Cluster ${clusterId + 1}`,
       description: "",
       messages: msgs,
-      opinions: [], // ClusterAnalyzer will populate
+      claims: [],
       summary: {
         consensus: [],
         conflicting: [],
-        sentiment: "neutral",
+        sentiment: "neutral" as const,
       },
-      nextSteps: [], // ClusterAnalyzer will populate
+      nextSteps: [],
     }));
 
   // 5. Build visualization data
@@ -119,7 +130,7 @@ export async function clusterByEmbedding(
   };
 
   console.log(`[Clusterer] Complete: ${clusters.length} clusters created`);
-  const clusterSizes = clusters.map((c) => `${c.topic}(${c.messages.length})`).join(", ");
+  const clusterSizes = clusters.map((c) => `${c.title}(${c.messages.length})`).join(", ");
   console.log(`[Clusterer] Cluster sizes: ${clusterSizes}`);
 
   return { clusters, visualization };
@@ -208,13 +219,13 @@ function arraysEqual(a: number[], b: number[]): boolean {
  */
 function createSingleCluster(
   messages: EmbeddedMessage[]
-): EmbeddingClustererResult {
-  const cluster: MessageCluster = {
+): ClustererResult {
+  const cluster: PipelineTopic = {
     id: "cluster-0",
-    topic: "All Messages",
+    title: "All Messages",
     description: "",
     messages,
-    opinions: [],
+    claims: [],
     summary: {
       consensus: [],
       conflicting: [],

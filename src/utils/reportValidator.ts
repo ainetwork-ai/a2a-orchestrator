@@ -2,46 +2,50 @@ import {
   Report,
   ReportStatistics,
   ValidationResult,
-  MessageCluster,
-  Opinion,
+  Topic,
 } from "../types/report";
 
 /**
- * Validate that report contains only substantive messages
+ * Validate report topics have valid claims
  */
 export function validateReportMessages(report: Report): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // Check each cluster
-  for (const cluster of report.clusters) {
-    for (const message of cluster.messages) {
-      // Critical: No non-substantive messages in output
-      if (message.isSubstantive === false) {
+  for (const topic of report.topics) {
+    if (topic.claims.length === 0) {
+      warnings.push(
+        `Topic "${topic.title}" has no claims`
+      );
+    }
+
+    for (const claim of topic.claims) {
+      if (!claim.title || claim.title.trim() === "") {
         errors.push(
-          `Non-substantive message found in cluster "${cluster.topic}": "${message.content.substring(0, 50)}..."`
+          `Claim "${claim.id}" in topic "${topic.title}" has empty title`
         );
       }
 
-      // Warning: Very short substantive messages might be misclassified
-      if (message.isSubstantive && message.content.length < 10) {
+      if (claim.quotes.length === 0) {
         warnings.push(
-          `Suspiciously short substantive message in cluster "${cluster.topic}": "${message.content}"`
+          `Claim "${claim.id}" in topic "${topic.title}" has no quotes (no source reference)`
+        );
+      }
+
+      for (const quote of claim.quotes) {
+        if (!quote.reference.segmentId) {
+          warnings.push(
+            `Quote "${quote.id}" in claim "${claim.id}" has no segment reference`
+          );
+        }
+      }
+
+      if (claim.confidence < 0 || claim.confidence > 1) {
+        warnings.push(
+          `Claim "${claim.id}" has invalid confidence value (${claim.confidence}), expected 0-1`
         );
       }
     }
-  }
-
-  // Verify counts
-  const totalMessagesInClusters = report.clusters.reduce(
-    (sum, c) => sum + c.messages.length,
-    0
-  );
-
-  if (totalMessagesInClusters !== report.statistics.totalMessages) {
-    warnings.push(
-      `Message count mismatch: clusters have ${totalMessagesInClusters} messages, statistics show ${report.statistics.totalMessages}`
-    );
   }
 
   return {
@@ -58,49 +62,24 @@ export function validateStatistics(statistics: ReportStatistics): ValidationResu
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // Check for negative values
-  if (statistics.totalMessages < 0) {
-    errors.push("totalMessages cannot be negative");
-  }
-  if (statistics.nonSubstantiveCount < 0) {
-    errors.push("nonSubstantiveCount cannot be negative");
+  if (statistics.totalOpinions < 0) {
+    errors.push("totalOpinions cannot be negative");
   }
 
-  // Check date range
   if (statistics.dateRange.start > statistics.dateRange.end) {
     warnings.push(
       `Date range is inverted: start (${statistics.dateRange.start}) is after end (${statistics.dateRange.end})`
     );
   }
 
-  // Check sampling consistency
-  if (statistics.wasSampled) {
-    if (statistics.totalMessages > statistics.totalMessagesBeforeSampling) {
-      errors.push(
-        `Total messages after sampling (${statistics.totalMessages}) exceeds original count (${statistics.totalMessagesBeforeSampling})`
-      );
-    }
-  }
-
-  // Check sentiment distribution totals
-  const sentimentTotal = Object.values(statistics.sentimentDistribution).reduce(
-    (sum, count) => sum + count,
+  // Check stance distribution totals
+  const stanceTotal = Object.values(statistics.stanceDistribution).reduce(
+    (sum: number, count: number) => sum + count,
     0
   );
-  if (sentimentTotal !== statistics.totalMessages && statistics.totalMessages > 0) {
+  if (stanceTotal !== statistics.totalOpinions && statistics.totalOpinions > 0) {
     warnings.push(
-      `Sentiment distribution total (${sentimentTotal}) doesn't match total messages (${statistics.totalMessages})`
-    );
-  }
-
-  // Check category distribution totals
-  const categoryTotal = Object.values(statistics.categoryDistribution).reduce(
-    (sum, count) => sum + count,
-    0
-  );
-  if (categoryTotal !== statistics.totalMessages && statistics.totalMessages > 0) {
-    warnings.push(
-      `Category distribution total (${categoryTotal}) doesn't match total messages (${statistics.totalMessages})`
+      `Stance distribution total (${stanceTotal}) doesn't match total opinions (${statistics.totalOpinions})`
     );
   }
 
@@ -112,114 +91,28 @@ export function validateStatistics(statistics: ReportStatistics): ValidationResu
 }
 
 /**
- * Validate cluster data
+ * Validate topic data
  */
-export function validateClusters(clusters: MessageCluster[]): ValidationResult {
+export function validateTopics(topics: Topic[]): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // Check for empty clusters
-  const emptyClusters = clusters.filter((c) => c.messages.length === 0);
-  if (emptyClusters.length > 0) {
-    warnings.push(
-      `Found ${emptyClusters.length} empty clusters: ${emptyClusters.map((c) => c.topic).join(", ")}`
-    );
+  if (topics.length === 0) {
+    warnings.push("Report has no topics");
   }
 
-  // Check for duplicate cluster IDs
-  const clusterIds = clusters.map((c) => c.id);
-  const uniqueIds = new Set(clusterIds);
-  if (uniqueIds.size !== clusterIds.length) {
-    errors.push("Duplicate cluster IDs found");
+  const topicIds = topics.map((t) => t.id);
+  const uniqueIds = new Set(topicIds);
+  if (uniqueIds.size !== topicIds.length) {
+    errors.push("Duplicate topic IDs found");
   }
 
-  // Check for duplicate message IDs across all clusters
-  const messageIds: string[] = [];
-  for (const cluster of clusters) {
-    for (const message of cluster.messages) {
-      if (messageIds.includes(message.id)) {
-        errors.push(
-          `Duplicate message ID "${message.id}" found in cluster "${cluster.topic}"`
-        );
-      }
-      messageIds.push(message.id);
+  for (const topic of topics) {
+    if (!topic.title || topic.title.trim() === "") {
+      errors.push(`Topic ${topic.id} has no title`);
     }
-  }
-
-  // Check for clusters with missing required fields
-  for (const cluster of clusters) {
-    if (!cluster.topic || cluster.topic.trim() === "") {
-      errors.push(`Cluster ${cluster.id} has no topic name`);
-    }
-    if (!cluster.summary) {
-      warnings.push(`Cluster "${cluster.topic}" has no summary`);
-    }
-  }
-
-  // TRD 05: Validate grounded opinions
-  for (const cluster of clusters) {
-    const groundingValidation = validateGroundedOpinions(cluster);
-    warnings.push(...groundingValidation.warnings);
-    // Grounding errors are warnings only, not critical errors
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
-    warnings,
-  };
-}
-
-/**
- * Validate grounded opinions in a cluster (TRD 05)
- * Checks that supportingMessages refer to valid message IDs in the cluster
- */
-export function validateGroundedOpinions(cluster: MessageCluster): ValidationResult {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-
-  // Get all valid message IDs in this cluster
-  const validMessageIds = new Set(cluster.messages.map(m => m.id));
-
-  for (const opinion of cluster.opinions) {
-    // Skip if not a proper Opinion object (backward compatibility)
-    if (typeof opinion === "string") {
-      warnings.push(
-        `Opinion in cluster "${cluster.topic}" is still in legacy string format`
-      );
-      continue;
-    }
-
-    // Check supportingMessages reference valid message IDs
-    if (opinion.supportingMessages && opinion.supportingMessages.length > 0) {
-      for (const msgId of opinion.supportingMessages) {
-        if (!validMessageIds.has(msgId)) {
-          warnings.push(
-            `Opinion "${opinion.id}" in cluster "${cluster.topic}" references invalid message ID "${msgId}"`
-          );
-        }
-      }
-    }
-
-    // Check mentionCount is reasonable
-    if (opinion.mentionCount > cluster.messages.length) {
-      warnings.push(
-        `Opinion "${opinion.id}" has mentionCount (${opinion.mentionCount}) exceeding cluster message count (${cluster.messages.length})`
-      );
-    }
-
-    // Check confidence is in valid range
-    if (opinion.confidence !== undefined && (opinion.confidence < 0 || opinion.confidence > 1)) {
-      warnings.push(
-        `Opinion "${opinion.id}" has invalid confidence value (${opinion.confidence}), expected 0-1`
-      );
-    }
-
-    // Warning for opinions without grounding
-    if ((!opinion.supportingMessages || opinion.supportingMessages.length === 0) && opinion.mentionCount === 0) {
-      warnings.push(
-        `Opinion "${opinion.id}" in cluster "${cluster.topic}" has no supporting messages (may indicate grounding failure)`
-      );
+    if (!topic.summary) {
+      warnings.push(`Topic "${topic.title}" has no summary`);
     }
   }
 
@@ -236,46 +129,22 @@ export function validateGroundedOpinions(cluster: MessageCluster): ValidationRes
 export function validateReport(report: Report): ValidationResult {
   const messageValidation = validateReportMessages(report);
   const statsValidation = validateStatistics(report.statistics);
-  const clusterValidation = validateClusters(report.clusters);
+  const topicValidation = validateTopics(report.topics);
 
   return {
     isValid:
       messageValidation.isValid &&
       statsValidation.isValid &&
-      clusterValidation.isValid,
+      topicValidation.isValid,
     errors: [
       ...messageValidation.errors,
       ...statsValidation.errors,
-      ...clusterValidation.errors,
+      ...topicValidation.errors,
     ],
     warnings: [
       ...messageValidation.warnings,
       ...statsValidation.warnings,
-      ...clusterValidation.warnings,
+      ...topicValidation.warnings,
     ],
   };
-}
-
-/**
- * Log filtering breakdown for debugging
- */
-export function logFilteringBreakdown(
-  totalMessages: number,
-  substantiveCount: number,
-  nonSubstantiveCount: number,
-  categoryBreakdown: Record<string, { substantive: number; nonSubstantive: number }>
-): void {
-  console.log(`[Validator] Filtering Breakdown:`);
-  console.log(`  Total messages: ${totalMessages}`);
-  console.log(`  Substantive: ${substantiveCount} (${((substantiveCount / totalMessages) * 100).toFixed(1)}%)`);
-  console.log(`  Non-substantive: ${nonSubstantiveCount} (${((nonSubstantiveCount / totalMessages) * 100).toFixed(1)}%)`);
-
-  if (Object.keys(categoryBreakdown).length > 0) {
-    console.log(`  By Category:`);
-    for (const [category, counts] of Object.entries(categoryBreakdown)) {
-      console.log(
-        `    ${category}: ${counts.substantive} substantive, ${counts.nonSubstantive} non-substantive`
-      );
-    }
-  }
 }

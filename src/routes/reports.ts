@@ -189,7 +189,6 @@ router.post("/", async (req: Request, res: Response) => {
  * Get report job status and result
  *
  * Query Parameters:
- * - includeMessages: "true" (default) | "false" - include messages in clusters
  * - fields: comma-separated field names (e.g., "statistics,synthesis") - return partial report
  *
  * Response:
@@ -201,8 +200,6 @@ router.post("/", async (req: Request, res: Response) => {
 router.get("/:jobId", async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
-    const includeMessages = req.query.includeMessages !== "false";
-
     if (!jobId || typeof jobId !== "string") {
       return res.status(400).json({
         success: false,
@@ -236,21 +233,13 @@ router.get("/:jobId", async (req: Request, res: Response) => {
       });
     }
 
-    // Strip messages from clusters if not requested
-    const fullReport = includeMessages
-      ? job.report
-      : {
-          ...job.report,
-          clusters: job.report.clusters.map((c) => ({ ...c, messages: [] })),
-        };
-
     // Support ?fields=statistics,synthesis to return partial data
     const fieldsParam = req.query.fields as string | undefined;
-    let report: unknown = fullReport;
+    let report: unknown = job.report;
 
     if (fieldsParam) {
       const requestedFields = fieldsParam.split(",").map((f) => f.trim());
-      const reportObj = fullReport as unknown as Record<string, unknown>;
+      const reportObj = job.report as unknown as Record<string, unknown>;
       const partial: Record<string, unknown> = {};
       for (const field of requestedFields) {
         if (Object.prototype.hasOwnProperty.call(reportObj, field)) {

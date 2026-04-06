@@ -1,16 +1,13 @@
 /**
  * Report Generation Pipeline
  *
- * Conversation-aware pipeline:
  * 1. Parse conversations into segments
  * 2. Extract opinions from segments (LLM)
  * 3. Generate embeddings (OpenAI)
  * 4. Cluster (UMAP + K-means)
- * 5. Subtopic clustering
- * 6. Analyze clusters (LLM - labels, summaries)
- * 7. Ground opinions (LLM)
- * 8. Calculate statistics
- * 9. Synthesize insights (LLM)
+ * 5. Analyze clusters (LLM - labels, summaries)
+ * 6. Calculate statistics
+ * 7. Synthesize insights (LLM)
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -27,6 +24,9 @@ import {
   ReportRequestParams,
   ReportJobProgress,
   ReportLanguage,
+  Source,
+  Claim,
+  Quote,
   type ConversationSegment,
   type ExtractedOpinion,
 } from "../../types/report";
@@ -203,12 +203,12 @@ async function runSharedPipeline(opts: {
 
   if (clustererResult.clusters.length > 0) {
     const clusterSummary = clustererResult.clusters
-      .map((c) => `${c.topic}(${c.messages.length})`)
+      .map((c) => `${c.title}(${c.messages.length})`)
       .join(", ");
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Analyze clusters
+  // Analyze clusters (LLM: topic labels, descriptions, summaries, nextSteps)
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
@@ -217,23 +217,43 @@ async function runSharedPipeline(opts: {
   );
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
-  // Map ExtractedOpinions to cluster opinions (no LLM needed — already grounded at extraction)
+  // Map ExtractedOpinions → Claims (no LLM — already grounded at extraction)
+  const segmentMap = new Map(
+    (conversationSegments || []).flatMap((seg) =>
+      seg.messages.map((m) => [m.id, { content: m.content, segment: seg }])
+    )
+  );
+
   if (extractedOpinions) {
     const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
     for (const cluster of analyzedClusters) {
-      cluster.opinions = cluster.messages
+      cluster.claims = cluster.messages
         .filter((m) => opinionMap.has(m.id))
         .map((m) => {
           const op = opinionMap.get(m.id)!;
+          const quotes: Quote[] = op.source.keyMessageIds.map((msgId) => {
+            const msgInfo = segmentMap.get(msgId);
+            return {
+              id: msgId,
+              text: msgInfo?.content || op.statement,
+              reference: {
+                id: `ref-${msgId}`,
+                sourceId: op.threadId,
+                segmentId: op.source.segmentId,
+                messageId: msgId,
+              },
+            };
+          });
           return {
             id: op.id,
-            text: op.statement,
-            type: "general" as const,
-            supportingMessages: op.source.keyMessageIds,
-            mentionCount: op.source.keyMessageIds.length,
+            title: op.statement,
+            quotes,
+            number: quotes.length,
+            similarClaims: [],
+            stance: op.stance,
             confidence: op.confidence,
-            sourceSegmentIds: [op.source.segmentId],
-          };
+            evolved: op.evolved,
+          } satisfies Claim;
         });
     }
   }
@@ -257,16 +277,27 @@ async function runSharedPipeline(opts: {
     `[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`
   );
 
-  // Build report
+  // Build sources from conversation segments
+  const sourceMap = new Map<string, number>();
+  for (const seg of conversationSegments || []) {
+    sourceMap.set(seg.threadId, (sourceMap.get(seg.threadId) || 0) + 1);
+  }
+  const sources: Source[] = Array.from(sourceMap.entries()).map(([id, segmentCount]) => ({
+    id,
+    segmentCount,
+  }));
+
+  // Build final report — strip internal messages from topics
+  const topics = analyzedClusters.map(({ messages, ...topic }) => topic);
+
   const report: Report = {
-    id: reportId,
     title,
-    createdAt: Date.now(),
+    description: params.description || "",
+    date: new Date().toISOString(),
+    topics,
+    sources,
     statistics: analyzerResult.statistics,
-    clusters: analyzedClusters,
     synthesis: synthesizerResult.synthesis,
-    ...(extractedOpinions && { extractedOpinions }),
-    ...(conversationSegments && { conversationSegments }),
   };
 
   // Validation
@@ -287,7 +318,7 @@ async function runSharedPipeline(opts: {
   }
 
   console.log(
-    `[ReportPipeline] Validation passed: ${report.clusters.length} clusters, ` +
+    `[ReportPipeline] Validation passed: ${report.topics.length} topics, ` +
     `${report.statistics.totalOpinions} opinions`
   );
   console.log(`[ReportPipeline] Report generation completed`);
@@ -298,14 +329,16 @@ async function runSharedPipeline(opts: {
  * Create an empty report when no messages are found
  */
 function createEmptyReport(
-  reportId: string,
+  _reportId: string,
   title: string,
   threadCount: number
 ): Report {
   return {
-    id: reportId,
     title,
-    createdAt: Date.now(),
+    description: "",
+    date: new Date().toISOString(),
+    topics: [],
+    sources: [],
     statistics: {
       totalOpinions: 0,
       totalThreads: threadCount,
@@ -314,7 +347,6 @@ function createEmptyReport(
       topTopics: [],
       deliberation: { totalOpinions: 0, evolvedCount: 0 },
     },
-    clusters: [],
   };
 }
 

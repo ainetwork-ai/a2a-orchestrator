@@ -1,19 +1,19 @@
 import RequestManager from "../../world/requestManager";
 import {
-  MessageCluster,
   ReportStatistics,
   ReportSynthesis,
   SynthesizerResult,
   ReportLanguage,
   ActionItem,
 } from "../../types/report";
+import { PipelineTopic } from "./clusterer";
 import { parseJsonResponse } from "../../utils/llm";
 
 /**
  * Synthesize all cluster analyses into a total summary
  */
 export async function synthesizeReport(
-  clusters: MessageCluster[],
+  clusters: PipelineTopic[],
   statistics: ReportStatistics,
   apiUrl: string,
   model: string,
@@ -35,7 +35,7 @@ export async function synthesizeReport(
 
   // Prepare cluster summaries for the prompt
   const clusterSummaries = clusters.map(cluster => ({
-    topic: cluster.topic,
+    topic: cluster.title,
     messageCount: cluster.messages.length,
     sentiment: cluster.summary.sentiment,
     consensus: cluster.summary.consensus,

@@ -2,7 +2,7 @@
  * Embedding-related types for TRD 12: Embedding-based Clustering Pipeline
  */
 
-import { ParsedMessage, CategorizedMessage } from "./report";
+import { ParsedMessage } from "./report";
 
 /**
  * Message with embedding vector
@@ -26,13 +26,6 @@ export interface EmbedderResult {
 export type EmbedFunction = (texts: string[]) => Promise<number[][]>;
 
 /**
- * Categorized message with embedding (for clustering)
- */
-export interface CategorizedEmbeddedMessage extends CategorizedMessage {
-  embedding: number[];
-}
-
-/**
  * Point data for cluster visualization
  */
 export interface ClusterVisualizationPoint {
@@ -50,14 +43,6 @@ export interface ClustererVisualization {
 }
 
 /**
- * Result of clustering operation
- */
-export interface EmbeddingClustererResult {
-  clusters: import("./report").MessageCluster[];
-  visualization: ClustererVisualization;
-}
-
-/**
  * Configuration for embedding model
  */
 export const EMBEDDING_CONFIG = {
@@ -68,10 +53,3 @@ export const EMBEDDING_CONFIG = {
   cachePrefix: "emb:msg:",
 } as const;
 
-/**
- * Configuration for category embeddings
- */
-export const CATEGORY_EMBEDDING_CONFIG = {
-  cacheKey: "emb:categories:v1",
-  cacheTTLSeconds: 7 * 24 * 60 * 60, // 7 days
-} as const;

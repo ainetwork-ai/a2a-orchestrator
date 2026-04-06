@@ -13,12 +13,12 @@
 import { v4 as uuidv4 } from "uuid";
 import RequestManager from "../../world/requestManager";
 import {
-  MessageCluster,
   ParsedMessage,
   ClusterSummary,
   ActionItem,
   ReportLanguage,
 } from "../../types/report";
+import { PipelineTopic } from "./clusterer";
 import { parseJsonResponse } from "../../utils/llm";
 
 /**
@@ -42,11 +42,11 @@ const ANALYZER_CONFIG = {
  * @returns Clusters with labels, summaries, and next steps
  */
 export async function analyzeClusters(
-  clusters: MessageCluster[],
+  clusters: PipelineTopic[],
   apiUrl: string,
   model: string,
   language: ReportLanguage = "ko"
-): Promise<MessageCluster[]> {
+): Promise<PipelineTopic[]> {
   console.log(`[ClusterAnalyzer] Analyzing ${clusters.length} clusters`);
 
   if (clusters.length === 0) {
@@ -70,12 +70,12 @@ export async function analyzeClusters(
  * Analyze a single cluster
  */
 async function analyzeCluster(
-  cluster: MessageCluster,
+  cluster: PipelineTopic,
   allMessages: ParsedMessage[],
   apiUrl: string,
   model: string,
   language: ReportLanguage
-): Promise<MessageCluster> {
+): Promise<PipelineTopic> {
   const clusterId = cluster.id || uuidv4();
 
   // Build inside examples (from this cluster)
@@ -152,7 +152,7 @@ Respond in JSON format only:
     );
 
     const parsed = parseJsonResponse<{
-      topic?: string;
+      topic?: string;  // LLM returns "topic" key, we map to "title"
       description?: string;
       summary?: { consensus?: string[]; conflicting?: string[]; sentiment?: string };
       nextSteps?: { action?: string; priority?: string; rationale?: string }[];
@@ -177,9 +177,9 @@ Respond in JSON format only:
     return {
       ...cluster,
       id: clusterId,
-      topic: parsed.topic || cluster.topic,
+      title: parsed.topic || cluster.title,
       description: parsed.description || cluster.description,
-      opinions: [],
+      claims: [],
       summary,
       nextSteps,
     };
@@ -190,7 +190,7 @@ Respond in JSON format only:
     return {
       ...cluster,
       id: clusterId,
-      opinions: [],
+      claims: [],
       summary: {
         consensus: [],
         conflicting: [],

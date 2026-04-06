@@ -1,11 +1,12 @@
-import { MessageCluster, ReportStatistics, AnalyzerResult, ExtractedOpinion } from "../../types/report";
+import { ReportStatistics, AnalyzerResult, ExtractedOpinion } from "../../types/report";
+import { PipelineTopic } from "./clusterer";
 
 /**
  * Analyze extracted opinions and clusters to generate statistics
  */
 export function analyzeData(
   opinions: ExtractedOpinion[],
-  clusters: MessageCluster[],
+  clusters: PipelineTopic[],
   threadCount: number,
 ): AnalyzerResult {
   const statistics: ReportStatistics = {
@@ -47,7 +48,7 @@ function calculateStanceDistribution(opinions: ExtractedOpinion[]): Record<strin
   return distribution;
 }
 
-function calculateTopTopics(clusters: MessageCluster[]): Array<{
+function calculateTopTopics(clusters: PipelineTopic[]): Array<{
   topic: string;
   count: number;
   percentage: number;
@@ -56,7 +57,7 @@ function calculateTopTopics(clusters: MessageCluster[]): Array<{
 
   return clusters
     .map((cluster) => ({
-      topic: cluster.topic,
+      topic: cluster.title,
       count: cluster.messages.length,
       percentage: totalMessages > 0
         ? Math.round((cluster.messages.length / totalMessages) * 100 * 10) / 10
