@@ -114,7 +114,6 @@ export async function clusterSubtopics(
 
   // Calculate centroids for each subtopic (average of UMAP coordinates if available)
   const subtopicCentroids = new Map<number, { x: number; y: number }>();
-  // Note: Centroids will be calculated in dotGridGenerator using UMAP coords
 
   // Create Subtopic objects
   const subtopics: Subtopic[] = Array.from(subtopicMap.entries())
