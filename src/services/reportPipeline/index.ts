@@ -208,7 +208,7 @@ async function runSharedPipeline(opts: {
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Analyze clusters (LLM: topic labels, descriptions, summaries, nextSteps)
+  // Analyze clusters (LLM: topic labels, descriptions, summaries)
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);

@@ -116,7 +116,6 @@ export async function clusterByEmbedding(
         conflicting: [],
         sentiment: "neutral" as const,
       },
-      nextSteps: [],
     }));
 
   // 5. Build visualization data
@@ -231,7 +230,6 @@ function createSingleCluster(
       conflicting: [],
       sentiment: "neutral",
     },
-    nextSteps: [],
   };
 
   const visualization: ClustererVisualization = {

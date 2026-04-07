@@ -4,7 +4,6 @@ import {
   ReportSynthesis,
   SynthesizerResult,
   ReportLanguage,
-  ActionItem,
 } from "../../types/report";
 import { PipelineTopic } from "./clusterer";
 import { parseJsonResponse } from "../../utils/llm";
@@ -24,7 +23,6 @@ export async function synthesizeReport(
   const defaultSynthesis: ReportSynthesis = {
     overallSentiment: "neutral",
     keyFindings: [],
-    topPriorities: [],
     executiveSummary: "",
   };
 
@@ -40,7 +38,6 @@ export async function synthesizeReport(
     sentiment: cluster.summary.sentiment,
     consensus: cluster.summary.consensus,
     conflicting: cluster.summary.conflicting,
-    nextSteps: cluster.nextSteps,
   }));
 
   const langInstruction = language === "ko"
@@ -62,8 +59,7 @@ ${JSON.stringify(clusterSummaries, null, 2)}
 Instructions:
 1. Determine the overall sentiment across all topics
 2. Identify 3-5 key findings that decision makers should know
-3. Prioritize the top 3-5 action items from all topics (combine similar ones, rank by impact)
-4. Write a 2-3 sentence executive summary for busy stakeholders
+3. Write a 2-3 sentence executive summary for busy stakeholders
 
 Respond in JSON format only:
 {
@@ -71,13 +67,6 @@ Respond in JSON format only:
   "keyFindings": [
     "Finding 1: ...",
     "Finding 2: ..."
-  ],
-  "topPriorities": [
-    {
-      "action": "Most important action",
-      "priority": "high",
-      "rationale": "Why this matters most"
-    }
   ],
   "executiveSummary": "A concise 2-3 sentence summary of the overall user feedback and recommended direction."
 }`;
@@ -95,18 +84,12 @@ Respond in JSON format only:
     const parsed = parseJsonResponse<{
       overallSentiment?: "positive" | "negative" | "mixed" | "neutral";
       keyFindings?: string[];
-      topPriorities?: { action?: string; priority?: string; rationale?: string }[];
       executiveSummary?: string;
     }>(response);
 
     const synthesis: ReportSynthesis = {
       overallSentiment: parsed.overallSentiment || "neutral",
       keyFindings: parsed.keyFindings || [],
-      topPriorities: (parsed.topPriorities || []).map((step: any) => ({
-        action: step.action || "",
-        priority: step.priority || "medium",
-        rationale: step.rationale || "",
-      })).filter((step: ActionItem) => step.action),
       executiveSummary: parsed.executiveSummary || "",
     };
 

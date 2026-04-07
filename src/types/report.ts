@@ -56,12 +56,6 @@ export interface ClusterSummary {
   sentiment: "positive" | "negative" | "mixed" | "neutral";
 }
 
-export interface ActionItem {
-  action: string;
-  priority: "high" | "medium" | "low";
-  rationale: string;
-}
-
 /**
  * Topic cluster (T3C: Topic)
  */
@@ -71,7 +65,6 @@ export interface Topic {
   description: string;
   claims: Claim[];
   summary: ClusterSummary;
-  nextSteps: ActionItem[];   // AINSPACE extension
 }
 
 /**
@@ -104,7 +97,6 @@ export interface ReportStatistics {
 export interface ReportSynthesis {
   overallSentiment: "positive" | "negative" | "mixed" | "neutral";
   keyFindings: string[];
-  topPriorities: ActionItem[];
   executiveSummary: string;
 }
 

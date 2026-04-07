@@ -190,7 +190,6 @@ Invalidate report cache.
     conflicting: string[];
     sentiment: "positive" | "negative" | "mixed" | "neutral";
   };
-  nextSteps: ActionItem[];         // AINSPACE extension
 }
 ```
 
@@ -253,7 +252,6 @@ Invalidate report cache.
 {
   overallSentiment: "positive" | "negative" | "mixed" | "neutral";
   keyFindings: string[];
-  topPriorities: ActionItem[];
   executiveSummary: string;
 }
 ```
@@ -284,7 +282,6 @@ Invalidate report cache.
 | — | `Claim.stance` | AINSPACE extension |
 | — | `Claim.confidence` | AINSPACE extension |
 | — | `Claim.evolved` | AINSPACE extension |
-| — | `Topic.nextSteps` | AINSPACE extension |
 
 ---
 
@@ -294,6 +291,6 @@ Invalidate report cache.
 2. Extract opinions (LLM) → ExtractedOpinion[]
 3. Generate embeddings → EmbeddedMessage[]
 4. Cluster (UMAP + K-means) → Topic[]
-5. Analyze clusters (LLM) → topic labels, summaries, nextSteps
+5. Analyze clusters (LLM) → topic labels, summaries
 6. Calculate statistics → ReportStatistics
 7. Synthesize insights (LLM) → ReportSynthesis

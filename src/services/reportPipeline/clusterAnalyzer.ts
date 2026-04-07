@@ -15,7 +15,6 @@ import RequestManager from "../../world/requestManager";
 import {
   ParsedMessage,
   ClusterSummary,
-  ActionItem,
   ReportLanguage,
 } from "../../types/report";
 import { PipelineTopic } from "./clusterer";
@@ -121,7 +120,6 @@ Based on the contrast between messages inside and outside the cluster, provide:
    - consensus: Common opinions shared by most users
    - conflicting: Conflicting opinions (if any)
    - sentiment: Overall sentiment ("positive", "negative", "mixed", "neutral")
-4. **Next Steps**: 1-3 actionable recommendations based on the feedback
 
 Respond in JSON format only:
 {
@@ -131,14 +129,7 @@ Respond in JSON format only:
     "consensus": ["Common opinion 1", "Common opinion 2"],
     "conflicting": ["Some users want X while others prefer Y"],
     "sentiment": "mixed"
-  },
-  "nextSteps": [
-    {
-      "action": "Specific action to take",
-      "priority": "high",
-      "rationale": "Why this is important"
-    }
-  ]
+  }
 }`;
 
   try {
@@ -152,27 +143,16 @@ Respond in JSON format only:
     );
 
     const parsed = parseJsonResponse<{
-      topic?: string;  // LLM returns "topic" key, we map to "title"
+      topic?: string;
       description?: string;
       summary?: { consensus?: string[]; conflicting?: string[]; sentiment?: string };
-      nextSteps?: { action?: string; priority?: string; rationale?: string }[];
     }>(response);
 
-    // Build Summary
     const summary: ClusterSummary = {
       consensus: parsed.summary?.consensus || [],
       conflicting: parsed.summary?.conflicting || [],
       sentiment: (parsed.summary?.sentiment as ClusterSummary["sentiment"]) || "neutral",
     };
-
-    // Build NextSteps
-    const nextSteps: ActionItem[] = (parsed.nextSteps || [])
-      .map((step: any) => ({
-        action: step.action || "",
-        priority: (step.priority || "medium") as ActionItem["priority"],
-        rationale: step.rationale || "",
-      }))
-      .filter((step: ActionItem) => step.action);
 
     return {
       ...cluster,
@@ -181,7 +161,6 @@ Respond in JSON format only:
       description: parsed.description || cluster.description,
       claims: [],
       summary,
-      nextSteps,
     };
   } catch (error) {
     console.error(`[ClusterAnalyzer] Error analyzing cluster ${cluster.id}:`, error);
@@ -196,7 +175,6 @@ Respond in JSON format only:
         conflicting: [],
         sentiment: cluster.summary?.sentiment || "neutral",
       },
-      nextSteps: [],
     };
   }
 }
