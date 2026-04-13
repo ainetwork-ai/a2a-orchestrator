@@ -1,184 +1,409 @@
-# A2A Orchestrator
+# A2A Orchestrator Backend
 
-A multi-agent orchestration system using A2A (Agent-to-Agent) protocol, featuring a Next.js frontend and separate Node.js backend.
-
-## Architecture
-
-This application is split into two parts:
-
-- **Frontend**: Next.js application (React, TypeScript, Tailwind CSS)
-- **Backend**: Express.js server managing world simulation and chat API
-
-```
-a2a-orchestrator/
-├── app/                    # Next.js frontend
-├── backend/                # Express.js backend
-└── ...
-```
+A multi-agent orchestration system using A2A (Agent-to-Agent) protocol. This is the backend server that manages agent conversations, world simulation, and report generation with T3C-style visualization.
 
 ## Features
 
 - **A2A Protocol Integration**: Communicates with external agents using A2A (Agent-to-Agent) protocol
-- **4 Historical Korean Agent Personas** engaging in conversations
-  - **류성룡 (영의정)**: Prime minister and strategist from the Joseon Dynasty
-  - **류운룡 (유학자)**: Confucian scholar and spiritual leader
-  - **깨비 (도깨비)**: Goblin spirit representing folk traditions
-  - **호랭 (수호신)**: Mountain guardian spirit
-
+- **Multi-Agent Conversations**: Orchestrates conversations between multiple AI agents
 - **Real-time Message Streaming**: SSE-based real-time updates
 - **Sequential Conversation Flow**: AI-recommended speaker order
 - **Block Summarization**: Conversation context compression
 - **Conversation Verification**: Automatic stop detection based on goal achievement
-- **Separate Frontend/Backend**: Better scalability and maintainability
+- **Report Generation**: Embedding-based clustering with T3C-style visualization
+- **Grounded Analysis**: Opinions linked to supporting messages for verifiability
+- **Redis Integration**: Conversation persistence, state management, and embedding cache
 
 ## Quick Start
 
-### 1. Backend Setup
+### Docker Development (Recommended)
+
+Includes Redis container for full functionality.
 
 ```bash
-cd backend
+# Copy and configure environment file
+cp .env.dev.example .env.dev
+
+# Edit .env.dev with your LLM API and Embedding API settings
+# Required: LLM_API_URL, LLM_MODEL
+# Required: OPENAI_API_KEY or Azure OpenAI embedding configuration
+
+# Start development environment (includes Redis)
+make dev
+
+# View logs
+make dev-logs
+
+# Stop
+make dev-down
+```
+
+The server will run on `http://localhost:3006`
+
+### Docker Production
+
+```bash
+# Copy and configure environment file
+cp .env.prod.example .env.prod
+
+# Edit .env.prod with your production settings
+# Required: LLM_API_URL, LLM_MODEL, REDIS_URL
+# Required: OPENAI_API_KEY or Azure OpenAI embedding configuration
+
+# Start production environment
+make prod
+
+# View logs
+make prod-logs
+
+# Stop
+make prod-down
+```
+
+The server will run on `http://localhost:3002`
+
+### Local Development (without Docker)
+
+Requires Redis running on your local machine.
+
+```bash
+# Install dependencies
 npm install
-cp .env.example .env
-# Edit .env with your LLM API settings
+
+# Copy environment file and update Redis URL to redis://redis:6379
+cp .env.dev.example .env.dev
+
+# Edit .env.dev:
+# - Set REDIS_URL=redis://127.0.0.1:6379 (for local Redis)
+# - Configure LLM_API_URL and LLM_MODEL
+# - Configure embedding API (OpenAI or Azure OpenAI)
+
+# Make sure Redis is running locally
+# redis-server
+
+# Run development server
 npm run dev
 ```
 
-The backend will run on `http://localhost:3001`
-
-### 2. Frontend Setup
-
-```bash
-# In the root directory
-npm install
-cp .env.example .env
-# Add NEXT_PUBLIC_BACKEND_URL=http://localhost:3001
-npm run dev
-```
-
-The frontend will run on `http://localhost:3000`
-
-## How It Works
-
-1. User sends a message
-2. Block summary is generated with conversation context
-3. AI recommends the next most appropriate speaker
-4. Recommended agent responds via A2A protocol
-5. Verifier checks if conversation goal is achieved
-6. If goal not achieved and conversation has progress, next agent responds
-7. Process continues until goal is achieved or conversation stalls
+The server will run on `http://localhost:3001`
 
 ## Environment Variables
 
-### Backend (.env in backend/)
+### Development (.env.dev)
+
 ```env
-# LLM API for Verifier
+# Server Configuration
+NODE_ENV=development
+PORT=3001
+
+# Redis Configuration (Docker network)
+REDIS_URL=redis://redis:6379
+
+# LLM API URL (vLLM chat completions endpoint)
 LLM_API_URL=http://your-llm-server:8000/v1/chat/completions
+
+# LLM Model path
 LLM_MODEL=/path/to/your/model
 
-# A2A Agent URLs
-AGENT_RYU_SEONG_RYONG_URL=https://your-agent-server.com/agent/ryu-seong-ryong
-AGENT_RYU_UN_RYONG_URL=https://your-agent-server.com/agent/ryu-un-ryong
-AGENT_GGAEBI_URL=https://your-agent-server.com/agent/ggaebi
-AGENT_HORAENG_URL=https://your-agent-server.com/agent/horaeng
+# Embedding API Configuration (Choose one)
+# Option 1: OpenAI
+OPENAI_API_KEY=sk-your-openai-api-key
 
-PORT=3001
-ALLOWED_ORIGINS=http://localhost:3000
+# Option 2: Azure OpenAI
+AZURE_OPENAI_EMBEDDING_BASE_URL=https://your-resource.openai.azure.com
+AZURE_OPENAI_EMBEDDING_API_KEY=your-azure-api-key
+AZURE_OPENAI_EMBEDDING_API_VERSION=2023-05-15
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME=text-embedding-3-large
+
+# SSL Configuration (allow self-signed certificates)
+NODE_TLS_REJECT_UNAUTHORIZED=0
+
+# CORS Configuration
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
 ```
 
-### Frontend (.env in root/)
+### Production (.env.prod)
+
 ```env
-NEXT_PUBLIC_BACKEND_URL=http://localhost:3001
+# Server Configuration
+NODE_ENV=production
+PORT=3001
+
+# Redis Configuration (External via host)
+REDIS_URL=redis://host.docker.internal:6379
+
+# LLM API URL (Production server)
+LLM_API_URL=https://your-production-llm-server:8000/v1/chat/completions
+
+# LLM Model path
+LLM_MODEL=/path/to/your/model
+
+# Embedding API Configuration (Choose one)
+OPENAI_API_KEY=sk-your-openai-api-key
+# or Azure OpenAI configuration (see above)
+
+# SSL Configuration (commented out for production security)
+# NODE_TLS_REJECT_UNAUTHORIZED=0
+
+# CORS Configuration (Production frontend)
+ALLOWED_ORIGINS=https://your-frontend-domain.com
 ```
 
-## Usage
+## Report Generation Pipeline
 
-1. Start the backend server (see Quick Start)
-2. Start the frontend server (see Quick Start)
-3. Open [http://localhost:3000](http://localhost:3000)
-4. Type a message or question
-5. Watch as 4 agents discuss and respond
-6. Enable "Auto Mode" for continuous conversations
-7. Use the Reset button to start fresh
+The report pipeline uses embedding-based clustering for deterministic, cost-effective analysis:
 
-## API Format
-
-The application uses vLLM's chat completions API:
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -d '{
-      "model": "/data/models/gpt-oss-120b",
-      "messages": [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Hello"}
-      ],
-      "max_tokens": 100,
-      "temperature": 0.7
-    }'
 ```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Report Generation Pipeline                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  1. Parse Messages      │ Extract messages from threads                 │
+│  2. Generate Embeddings │ OpenAI/Azure text-embedding-3 (cached)        │
+│  3. Categorize          │ Embedding similarity (no LLM)                 │
+│  4. Cluster             │ UMAP + K-means (deterministic)                │
+│  5. Subtopic Clustering │ K-means within topics (dot grid)              │
+│  6. Analyze Clusters    │ LLM: labels, opinions, summaries              │
+│  7. Ground Opinions     │ LLM: link opinions to supporting messages     │
+│  8. Calculate Stats     │ Aggregations and distributions                │
+│  9. Synthesize          │ LLM: key findings, executive summary          │
+│ 10. Visualization       │ Scatter plot, topic tree, charts              │
+│ 11. Dot Grid            │ T3C-style message visualization               │
+│ 12. Render Markdown     │ Human-readable report                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Features
+
+- **Embedding Caching**: 30-day Redis cache for embeddings (cost savings on repeated analysis)
+- **Grounded Analysis**: Every opinion linked to supporting message IDs
+- **T3C Dot Grid**: Visual representation of messages with subtopic clustering
+- **Privacy-Safe**: No user IDs stored, only unique user counts via thread IDs
 
 ## Project Structure
 
 ```
 a2a-orchestrator/
-├── app/                       # Next.js frontend
-│   ├── globals.css
-│   ├── layout.tsx
-│   └── page.tsx              # Main chat UI
-├── backend/                   # Express.js backend
-│   ├── src/
-│   │   ├── server.ts         # Server entry point
-│   │   ├── routes/
-│   │   │   └── chat.ts       # Chat API routes
-│   │   ├── world/            # Orchestration logic
-│   │   │   ├── agents.ts     # A2A agent integration
-│   │   │   ├── world.ts      # State management
-│   │   │   ├── worldManager.ts
-│   │   │   ├── messageDAG.ts
-│   │   │   ├── requestManager.ts
-│   │   │   └── verifier.ts   # Conversation verification
-│   │   └── types/
-│   │       └── index.ts
-│   ├── Dockerfile
-│   ├── docker-compose.yml
-│   ├── package.json
-│   └── .env
-└── README.md
+├── src/
+│   ├── server.ts                    # Server entry point
+│   ├── routes/
+│   │   ├── threads.ts               # Thread management API
+│   │   ├── agents.ts                # Agent import API
+│   │   └── reports.ts               # Report generation API
+│   ├── world/                       # Orchestration logic
+│   │   ├── threadManager.ts         # Thread state management
+│   │   ├── world.ts                 # World simulation
+│   │   ├── worldManager.ts          # World lifecycle management
+│   │   ├── messageDAG.ts            # Message DAG structure
+│   │   ├── requestManager.ts        # LLM request handling
+│   │   └── verifier.ts              # Conversation verification
+│   ├── services/
+│   │   ├── reportService.ts         # Report job management
+│   │   └── reportPipeline/          # Report generation pipeline
+│   │       ├── index.ts             # Pipeline orchestration
+│   │       ├── parser.ts            # Thread message parsing
+│   │       ├── embedder.ts          # OpenAI/Azure embedding
+│   │       ├── categorizer.ts       # Embedding-based categorization
+│   │       ├── clusterer.ts         # UMAP + K-means clustering
+│   │       ├── subtopicClusterer.ts # Subtopic clustering (TRD 13)
+│   │       ├── clusterAnalyzer.ts   # LLM cluster analysis
+│   │       ├── grounding.ts         # Opinion grounding (TRD 05)
+│   │       ├── analyzer.ts          # Statistics calculation
+│   │       ├── synthesizer.ts       # Report synthesis
+│   │       ├── visualizer.ts        # Visualization data
+│   │       ├── dotGridGenerator.ts  # Dot grid (TRD 13)
+│   │       └── renderer.ts          # Markdown rendering
+│   ├── utils/
+│   │   ├── redis.ts                 # Redis utilities
+│   │   ├── reportTransformer.ts     # T3C format transformer
+│   │   └── reportValidator.ts       # Report validation
+│   └── types/
+│       ├── index.ts                 # Core type definitions
+│       ├── report.ts                # Report types (T3C)
+│       ├── embedding.ts             # Embedding types
+│       └── visualization.ts         # Visualization types
+├── dist/                            # Built files (generated)
+├── Dockerfile
+├── docker-compose.dev.yml
+├── docker-compose.prod.yml
+├── Makefile
+├── package.json
+└── tsconfig.json
 ```
 
-## API Documentation
+## API Endpoints
 
-See [backend/README.md](backend/README.md) for detailed API documentation.
+### Health Check
+```
+GET /api/health
+```
 
-## Technology Stack
+### Thread Management
+```
+GET    /api/threads              # List all threads
+POST   /api/threads              # Create new thread
+POST   /api/threads/:id/agents   # Add agent to thread
+POST   /api/threads/:id/messages # Send message to thread
+GET    /api/threads/:id/stream   # SSE stream for thread updates
+```
 
-### Frontend
-- Next.js 16
-- React 19
-- TypeScript
-- Tailwind CSS
+### Agent Management
+```
+POST   /api/agents/import        # Import agent from A2A endpoint
+```
 
-### Backend
-- Express.js
-- TypeScript
-- ts-node-dev for development
+### Report Generation
+```
+POST   /api/reports              # Create report job
+GET    /api/reports              # List reports (paginated, filterable)
+GET    /api/reports/:jobId       # Get report (format: json|markdown|full)
+PATCH  /api/reports/:jobId       # Update report metadata
+DELETE /api/reports/:jobId       # Delete report
+GET    /api/reports/:jobId/topics        # Get topics only
+GET    /api/reports/:jobId/visualization # Get visualization data
+GET    /api/reports/:jobId/statistics    # Get statistics
+GET    /api/reports/:jobId/markdown      # Get markdown (plain text)
+```
+
+### Report API Examples
+
+**Create Report:**
+```bash
+curl -X POST http://localhost:3006/api/reports \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Weekly Analysis",
+    "description": "User feedback analysis",
+    "tags": ["weekly", "feedback"],
+    "language": "ko"
+  }'
+```
+
+**Get Report (T3C JSON format):**
+```bash
+curl "http://localhost:3006/api/reports/{jobId}?format=full"
+```
+
+**List Reports with Filtering:**
+```bash
+curl "http://localhost:3006/api/reports?page=1&limit=20&tags=weekly&status=completed"
+```
+
+## T3C Report Format
+
+The API returns reports in T3C (Talk to the City) compatible format:
+
+```json
+{
+  "id": "report-uuid",
+  "title": "Report Title",
+  "version": "1.0.0",
+  "metadata": {
+    "processingTime": 15000,
+    "scope": { "totalMessages": 500, "substantiveMessages": 420 },
+    "filtering": { "filteringRate": 16.0, "filterReasons": {...} }
+  },
+  "statistics": { "totalMessages": 420, "topTopics": [...] },
+  "synthesis": { "keyFindings": [...], "executiveSummary": "..." },
+  "topics": [
+    {
+      "id": "topic-1",
+      "name": "Feature Requests",
+      "opinions": [
+        {
+          "text": "Users want dark mode",
+          "supportingMessages": ["msg-1", "msg-5", "msg-12"],
+          "mentionCount": 15,
+          "confidence": 0.92
+        }
+      ],
+      "subtopics": [
+        { "id": "st-1", "label": "UI Improvements", "messageCount": 25 }
+      ]
+    }
+  ],
+  "visualization": { "scatterPlot": {...}, "topicTree": {...} },
+  "dotGrid": { "topics": [...], "totalMessages": 420 }
+}
+```
+
+## How It Works
+
+### Conversation Flow
+1. **Thread Creation**: Create a conversation thread
+2. **Agent Addition**: Add AI agents to the thread
+3. **Message Sending**: User sends a message to the thread
+4. **Block Summary**: System generates conversation context summary
+5. **Speaker Selection**: AI recommends the next most appropriate speaker
+6. **Agent Response**: Selected agent responds via A2A protocol
+7. **Verification**: System checks if conversation goal is achieved
+8. **Continuation**: Process continues until goal achieved or conversation stalls
+
+### Report Generation Flow
+1. **Job Creation**: POST creates async job, returns jobId
+2. **Processing**: Pipeline processes messages (SSE updates available)
+3. **Completion**: Report available via GET with format parameter
+4. **Caching**: Identical requests return cached results
+
+## Docker Architecture
+
+### Development Environment
+- **Backend**: Port 3006:3001
+- **Redis**: Port 6378:6379 (included)
+- **Network**: Internal docker network
+- **Redis URL**: `redis://redis:6379`
+
+### Production Environment
+- **Backend**: Port 3002:3001
+- **Redis**: External (via host.docker.internal)
+- **Redis URL**: `redis://host.docker.internal:6379`
 
 ## Development
 
-### Backend Development
 ```bash
-cd backend
-npm run dev      # Development with hot reload
-npm run build    # Build for production
-npm start        # Run production build
+# Local development with hot reload
+npm run dev
+
+# Build TypeScript
+npm run build
+
+# Run production build
+npm start
+
+# Type check
+npx tsc --noEmit
+
+# Lint code
+npm run lint
 ```
 
-### Frontend Development
+## Docker Commands
+
+### Development
 ```bash
-npm run dev      # Development server
-npm run build    # Build for production
-npm start        # Run production build
+make dev          # Start dev environment
+make dev-build    # Build and start
+make dev-down     # Stop and remove containers
+make dev-logs     # View logs
 ```
+
+### Production
+```bash
+make prod         # Start prod environment
+make prod-build   # Build and start
+make prod-down    # Stop and remove containers
+make prod-logs    # View logs
+```
+
+## Technology Stack
+
+- **Runtime**: Node.js 22
+- **Framework**: Express.js
+- **Language**: TypeScript
+- **Database**: Redis (state, cache, embeddings)
+- **Protocol**: A2A (Agent-to-Agent)
+- **AI Integration**: vLLM / OpenAI compatible API
+- **Embeddings**: OpenAI / Azure OpenAI text-embedding-3
+- **Clustering**: UMAP-js + K-means
 
 ## License
 
