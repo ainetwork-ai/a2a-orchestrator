@@ -10,7 +10,6 @@
  * 7. Synthesize insights (LLM)
  */
 
-import { v4 as uuidv4 } from "uuid";
 import { parseConversations } from "./conversationParser";
 import { extractOpinions } from "./opinionExtractor";
 import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
@@ -98,7 +97,6 @@ export async function generateReport(
   model: string,
   onProgress?: ProgressCallback
 ): Promise<Report> {
-  const reportId = uuidv4();
   const title = params.title || "User Conversation Analysis Report";
   const language: ReportLanguage = params.language || "ko";
 
@@ -113,7 +111,7 @@ export async function generateReport(
   );
 
   if (conversationResult.segments.length === 0) {
-    return createEmptyReport(reportId, title, conversationResult.threadCount);
+    return createEmptyReport(title, conversationResult.threadCount);
   }
 
   // Step 2: Extract opinions from segments using LLM
@@ -128,7 +126,7 @@ export async function generateReport(
   );
 
   if (extractionResult.opinions.length === 0) {
-    return createEmptyReport(reportId, title, conversationResult.threadCount);
+    return createEmptyReport(title, conversationResult.threadCount);
   }
 
   // Step 3: Generate embeddings for opinion statements
@@ -141,9 +139,9 @@ export async function generateReport(
     `[ReportPipeline] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
   );
 
-  // Steps 4-9: shared pipeline
+  // Steps 4-7: shared pipeline
   return runSharedPipeline({
-    reportId, title, language, params, apiUrl, model,
+    title, language, params, apiUrl, model,
     substantiveMessages: embeddingResult.messages,
     threadCount: conversationResult.threadCount,
     onProgress, stepOffset: 3,
@@ -172,7 +170,6 @@ function makeProgressUpdater(steps: string[], onProgress?: ProgressCallback) {
  * Shared pipeline: clustering through synthesis (Steps 4-9)
  */
 async function runSharedPipeline(opts: {
-  reportId: string;
   title: string;
   language: ReportLanguage;
   params: ReportRequestParams;
@@ -186,7 +183,7 @@ async function runSharedPipeline(opts: {
   conversationSegments?: ConversationSegment[];
 }): Promise<Report> {
   const {
-    reportId, title, language, params, apiUrl, model,
+    title, language, params, apiUrl, model,
     substantiveMessages, threadCount,
     stepOffset, extractedOpinions, conversationSegments,
   } = opts;
@@ -218,32 +215,30 @@ async function runSharedPipeline(opts: {
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
   // Map ExtractedOpinions → Claims (no LLM — already grounded at extraction)
-  const segmentMap = new Map(
-    (conversationSegments || []).flatMap((seg) =>
-      seg.messages.map((m) => [m.id, { content: m.content, segment: seg }])
-    )
-  );
-
   if (extractedOpinions) {
+    const segmentMap = new Map(
+      (conversationSegments || []).flatMap((seg) =>
+        seg.messages.map((m) => [m.id, { content: m.content }])
+      )
+    );
     const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
     for (const cluster of analyzedClusters) {
       cluster.claims = cluster.messages
         .filter((m) => opinionMap.has(m.id))
         .map((m) => {
           const op = opinionMap.get(m.id)!;
-          const quotes: Quote[] = op.source.keyMessageIds.map((msgId) => {
-            const msgInfo = segmentMap.get(msgId);
-            return {
+          const quotes: Quote[] = op.source.keyMessageIds
+            .filter((msgId) => segmentMap.has(msgId))
+            .map((msgId) => ({
               id: msgId,
-              text: msgInfo?.content || op.statement,
+              text: segmentMap.get(msgId)!.content,
               reference: {
                 id: `ref-${msgId}`,
                 sourceId: op.threadId,
                 segmentId: op.source.segmentId,
                 messageId: msgId,
               },
-            };
-          });
+            }));
           return {
             id: op.id,
             title: op.statement,
@@ -329,7 +324,6 @@ async function runSharedPipeline(opts: {
  * Create an empty report when no messages are found
  */
 function createEmptyReport(
-  _reportId: string,
   title: string,
   threadCount: number
 ): Report {
