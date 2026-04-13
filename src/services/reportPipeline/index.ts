@@ -1,88 +1,50 @@
 /**
- * Report Generation Pipeline - TRD 12: Embedding-based Clustering
+ * Report Generation Pipeline
  *
- * New pipeline using embeddings for deterministic, cost-effective processing:
- * 1. Parse threads
- * 2. Generate embeddings (OpenAI)
- * 3. Categorize (embedding similarity, no LLM)
- * 4. Cluster (UMAP + K-means, no LLM)
- * 5. Analyze clusters (LLM - labels, opinions, summaries)
- * 6. Ground opinions (LLM)
- * 7. Calculate statistics
- * 8. Synthesize insights (LLM)
- * 9. Generate visualization
- * 10. Render report
+ * 1. Parse conversations into segments
+ * 2. Extract opinions from segments (LLM)
+ * 3. Generate embeddings (OpenAI)
+ * 4. Cluster (UMAP + K-means)
+ * 5. Analyze clusters (LLM - labels, summaries)
+ * 6. Calculate statistics
+ * 7. Synthesize insights (LLM)
  */
 
-import { v4 as uuidv4 } from "uuid";
-import { parseThreads } from "./parser";
 import { parseConversations } from "./conversationParser";
 import { extractOpinions } from "./opinionExtractor";
 import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
-import {
-  categorizeEmbeddedMessages,
-  categorizeByEmbedding,
-  initializeCategoryEmbeddings,
-  calculateFilteringBreakdown,
-} from "./categorizer";
 import { clusterByEmbedding } from "./clusterer";
-import { addSubtopicsToAllClusters } from "./subtopicClusterer";
 import { analyzeClusters } from "./clusterAnalyzer";
 import { analyzeData } from "./analyzer";
-import { groundOpinions } from "./grounding";
 import { synthesizeReport } from "./synthesizer";
-import { generateVisualizationData } from "./visualizer";
-import { generateDotGridData } from "./dotGridGenerator";
-import { renderMarkdown } from "./renderer";
-import { opinionsToParsedMessages, toCategorizedEmbedded, attachSourceSegmentIds } from "./pipelineUtils";
+import { opinionsToParsedMessages } from "./pipelineUtils";
 import {
   Report,
   ReportRequestParams,
   ReportJobProgress,
   ReportLanguage,
-  FilteringBreakdown,
+  Source,
+  Claim,
+  Quote,
   type ConversationSegment,
   type ExtractedOpinion,
 } from "../../types/report";
-import { EmbedFunction, CategorizedEmbeddedMessage } from "../../types/embedding";
+import { EmbedFunction, EmbeddedMessage } from "../../types/embedding";
 import { validateReportMessages, validateStatistics } from "../../utils/reportValidator";
 
 export type ProgressCallback = (progress: ReportJobProgress) => void;
 
 /**
- * Pipeline steps (TRD 12 + TRD 13) - Legacy
+ * Pipeline steps
  */
-const LEGACY_STEPS = [
-  "Parsing messages",
-  "Generating embeddings",
-  "Categorizing",
-  "Clustering",
-  "Subtopic clustering",      // TRD 13
-  "Analyzing clusters",
-  "Grounding opinions",
-  "Calculating statistics",
-  "Synthesizing insights",
-  "Generating visualization",
-  "Generating dot grid",      // TRD 13
-  "Rendering report",
-];
-
-/**
- * Pipeline steps (EPIC1: Conversation-aware)
- */
-const CONVERSATION_STEPS = [
+const PIPELINE_STEPS = [
   "Parsing conversations",
   "Extracting opinions",
   "Generating embeddings",
   "Clustering",
-  "Subtopic clustering",
   "Analyzing clusters",
-  "Grounding opinions",
   "Calculating statistics",
   "Synthesizing insights",
-  "Generating visualization",
-  "Generating dot grid",
-  "Rendering report",
 ];
 
 // Singleton embedder function (reused across requests)
@@ -128,7 +90,6 @@ function getEmbedder(): EmbedFunction {
 
 /**
  * Execute the report generation pipeline.
- * Dispatches to legacy or conversation-aware pipeline based on params.pipelineMode.
  */
 export async function generateReport(
   params: ReportRequestParams,
@@ -136,150 +97,53 @@ export async function generateReport(
   model: string,
   onProgress?: ProgressCallback
 ): Promise<Report> {
-  console.log("[ReportPipeline] Starting generateReport with params:", JSON.stringify(params));
-  if (params.pipelineMode === "conversation") {
-    return generateConversationReport(params, apiUrl, model, onProgress);
-  }
-  return generateLegacyReport(params, apiUrl, model, onProgress);
-}
-
-/**
- * Legacy pipeline (TRD 12: Embedding-based)
- */
-async function generateLegacyReport(
-  params: ReportRequestParams,
-  apiUrl: string,
-  model: string,
-  onProgress?: ProgressCallback
-): Promise<Report> {
-  const steps = LEGACY_STEPS;
-  const reportId = uuidv4();
   const title = params.title || "User Conversation Analysis Report";
   const language: ReportLanguage = params.language || "ko";
 
-  const updateProgress = makeProgressUpdater(steps, onProgress);
-
-  // Step 1: Parse threads (no sampling - process all messages)
-  updateProgress(1);
-  console.log(`[ReportPipeline] Step 1: ${steps[0]}`);
-  const parserResult = await parseThreads({
-    ...params,
-    maxMessages: undefined, // Remove sampling - TRD 12
-  });
-  console.log(
-    `[ReportPipeline] Parsed ${parserResult.messages.length} messages from ${parserResult.threadCount} threads`
-  );
-
-  if (parserResult.messages.length === 0) {
-    return createEmptyReport(reportId, title, parserResult.threadCount);
-  }
-
-  // Get embedder
-  const embedder = getEmbedder();
-
-  // Step 2: Generate embeddings
-  updateProgress(2);
-  console.log(`[ReportPipeline] Step 2: ${steps[1]}`);
-  const embeddingResult = await embedMessages(parserResult.messages, embedder);
-  console.log(
-    `[ReportPipeline] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
-  );
-
-  // Step 3: Categorize using embeddings (no LLM)
-  updateProgress(3);
-  console.log(`[ReportPipeline] Step 3: ${steps[2]}`);
-  await initializeCategoryEmbeddings(embedder);
-  const categorizedMessages = categorizeByEmbedding(embeddingResult.messages);
-
-  // Filter substantive messages
-  const substantiveMessages = categorizedMessages.filter((m) => m.isSubstantive);
-  const nonSubstantiveCount = categorizedMessages.length - substantiveMessages.length;
-  const filteringBreakdown = calculateFilteringBreakdown(categorizedMessages);
-
-  console.log(
-    `[ReportPipeline] Categorized: ${substantiveMessages.length} substantive, ${nonSubstantiveCount} filtered`
-  );
-
-  if (substantiveMessages.length === 0) {
-    console.warn("[ReportPipeline] No substantive messages found");
-    return createEmptyReport(reportId, title, parserResult.threadCount);
-  }
-
-  // Steps 4-12: shared pipeline
-  return runSharedPipeline({
-    steps, reportId, title, language, params, apiUrl, model,
-    substantiveMessages, threadCount: parserResult.threadCount,
-    totalMessagesBeforeSampling: parserResult.messages.length,
-    nonSubstantiveCount, filteringBreakdown,
-    onProgress, stepOffset: 3,
-  });
-}
-
-/**
- * Conversation-aware pipeline (EPIC1)
- */
-async function generateConversationReport(
-  params: ReportRequestParams,
-  apiUrl: string,
-  model: string,
-  onProgress?: ProgressCallback
-): Promise<Report> {
-  const steps = CONVERSATION_STEPS;
-  const reportId = uuidv4();
-  const title = params.title || "User Conversation Analysis Report";
-  const language: ReportLanguage = params.language || "ko";
-
-  const updateProgress = makeProgressUpdater(steps, onProgress);
+  const updateProgress = makeProgressUpdater(PIPELINE_STEPS, onProgress);
 
   // Step 1: Parse conversations into segments
   updateProgress(1);
-  console.log(`[ReportPipeline:Conv] Step 1: ${steps[0]}`);
+  console.log(`[ReportPipeline] Step 1: ${PIPELINE_STEPS[0]}`);
   const conversationResult = await parseConversations(params);
   console.log(
-    `[ReportPipeline:Conv] Parsed ${conversationResult.segments.length} segments from ${conversationResult.threadCount} threads`
+    `[ReportPipeline] Parsed ${conversationResult.segments.length} segments from ${conversationResult.threadCount} threads`
   );
 
   if (conversationResult.segments.length === 0) {
-    return createEmptyReport(reportId, title, conversationResult.threadCount);
+    return createEmptyReport(title, conversationResult.threadCount);
   }
 
   // Step 2: Extract opinions from segments using LLM
   updateProgress(2);
-  console.log(`[ReportPipeline:Conv] Step 2: ${steps[1]}`);
+  console.log(`[ReportPipeline] Step 2: ${PIPELINE_STEPS[1]}`);
   const extractionResult = await extractOpinions(
     conversationResult.segments, apiUrl, model, language
   );
   console.log(
-    `[ReportPipeline:Conv] Extracted ${extractionResult.opinions.length} opinions ` +
+    `[ReportPipeline] Extracted ${extractionResult.opinions.length} opinions ` +
     `(${extractionResult.failedSegments} failed, ${extractionResult.evolvedOpinionCount} evolved)`
   );
 
   if (extractionResult.opinions.length === 0) {
-    return createEmptyReport(reportId, title, conversationResult.threadCount);
+    return createEmptyReport(title, conversationResult.threadCount);
   }
 
   // Step 3: Generate embeddings for opinion statements
   updateProgress(3);
-  console.log(`[ReportPipeline:Conv] Step 3: ${steps[2]}`);
+  console.log(`[ReportPipeline] Step 3: ${PIPELINE_STEPS[2]}`);
   const embedder = getEmbedder();
   const parsedMessages = opinionsToParsedMessages(extractionResult.opinions);
   const embeddingResult = await embedMessages(parsedMessages, embedder);
   console.log(
-    `[ReportPipeline:Conv] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
+    `[ReportPipeline] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
   );
 
-  // Adapt to CategorizedEmbeddedMessage (stance → category/sentiment mapping)
-  const categorizedMessages = toCategorizedEmbedded(
-    embeddingResult.messages, extractionResult.opinions
-  );
-
-  // Steps 4-12: shared pipeline
+  // Steps 4-7: shared pipeline
   return runSharedPipeline({
-    steps, reportId, title, language, params, apiUrl, model,
-    substantiveMessages: categorizedMessages,
+    title, language, params, apiUrl, model,
+    substantiveMessages: embeddingResult.messages,
     threadCount: conversationResult.threadCount,
-    totalMessagesBeforeSampling: conversationResult.totalMessages,
-    nonSubstantiveCount: 0,
     onProgress, stepOffset: 3,
     extractedOpinions: extractionResult.opinions,
     conversationSegments: conversationResult.segments,
@@ -303,147 +167,137 @@ function makeProgressUpdater(steps: string[], onProgress?: ProgressCallback) {
 }
 
 /**
- * Shared pipeline from clustering through rendering (Steps 4-12)
+ * Shared pipeline: clustering through synthesis (Steps 4-9)
  */
 async function runSharedPipeline(opts: {
-  steps: string[];
-  reportId: string;
   title: string;
   language: ReportLanguage;
   params: ReportRequestParams;
   apiUrl: string;
   model: string;
-  substantiveMessages: CategorizedEmbeddedMessage[];
+  substantiveMessages: EmbeddedMessage[];
   threadCount: number;
-  totalMessagesBeforeSampling: number;
-  nonSubstantiveCount: number;
-  filteringBreakdown?: FilteringBreakdown;
   onProgress?: ProgressCallback;
   stepOffset: number;
   extractedOpinions?: ExtractedOpinion[];
   conversationSegments?: ConversationSegment[];
 }): Promise<Report> {
   const {
-    steps, reportId, title, language, params, apiUrl, model,
-    substantiveMessages, threadCount, totalMessagesBeforeSampling,
-    nonSubstantiveCount, filteringBreakdown, stepOffset,
-    extractedOpinions, conversationSegments,
+    title, language, params, apiUrl, model,
+    substantiveMessages, threadCount,
+    stepOffset, extractedOpinions, conversationSegments,
   } = opts;
 
-  const updateProgress = makeProgressUpdater(steps, opts.onProgress);
+  const updateProgress = makeProgressUpdater(PIPELINE_STEPS, opts.onProgress);
   let step = stepOffset;
 
   // Clustering
   step++;
   updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
+  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const clustererResult = await clusterByEmbedding(substantiveMessages);
   console.log(`[ReportPipeline] Created ${clustererResult.clusters.length} clusters`);
 
   if (clustererResult.clusters.length > 0) {
     const clusterSummary = clustererResult.clusters
-      .map((c) => `${c.topic}(${c.messages.length})`)
+      .map((c) => `${c.title}(${c.messages.length})`)
       .join(", ");
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Subtopic clustering
+  // Analyze clusters (LLM: topic labels, descriptions, summaries)
   step++;
   updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
-  const clustersWithSubtopics = await addSubtopicsToAllClusters(
-    clustererResult.clusters, substantiveMessages
-  );
-  console.log(`[ReportPipeline] Added subtopics to ${clustersWithSubtopics.length} clusters`);
-
-  // Analyze clusters
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
+  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const analyzedClusters = await analyzeClusters(
-    clustersWithSubtopics, apiUrl, model, language
+    clustererResult.clusters, apiUrl, model, language
   );
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
-  // Ground opinions
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
-  let groundingResult = await groundOpinions(analyzedClusters, apiUrl, model);
-  console.log(`[ReportPipeline] Grounded opinions in ${groundingResult.clusters.length} clusters`);
-
-  // Attach source segment IDs if conversation pipeline (EPIC1)
+  // Map ExtractedOpinions → Claims (no LLM — already grounded at extraction)
   if (extractedOpinions) {
-    groundingResult = {
-      ...groundingResult,
-      clusters: attachSourceSegmentIds(groundingResult.clusters, extractedOpinions),
-    };
+    // messageId → { content, segment } for quote text + conversation context
+    const messageMap = new Map(
+      (conversationSegments || []).flatMap((seg) =>
+        seg.messages.map((m) => [m.id, { content: m.content, segment: seg }])
+      )
+    );
+    const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
+    for (const cluster of analyzedClusters) {
+      cluster.claims = cluster.messages
+        .filter((m) => opinionMap.has(m.id))
+        .map((m) => {
+          const op = opinionMap.get(m.id)!;
+          const quotes: Quote[] = op.source.keyMessageIds
+            .filter((msgId) => messageMap.has(msgId))
+            .map((msgId) => {
+              const { content, segment } = messageMap.get(msgId)!;
+              return {
+                id: msgId,
+                text: content,
+                context: segment.messages,
+                reference: {
+                  id: `ref-${msgId}`,
+                  sourceId: op.threadId,
+                  segmentId: op.source.segmentId,
+                  messageId: msgId,
+                },
+              };
+            });
+          return {
+            id: op.id,
+            title: op.statement,
+            quotes,
+            number: quotes.length,
+            similarClaims: [],
+            stance: op.stance,
+            confidence: op.confidence,
+            evolved: op.evolved,
+          } satisfies Claim;
+        });
+    }
   }
 
   // Calculate statistics
   step++;
   updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
-  const deliberation = extractedOpinions
-    ? { totalOpinions: extractedOpinions.length, evolvedCount: extractedOpinions.filter((op) => op.evolved).length }
-    : undefined;
+  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const analyzerResult = analyzeData(
-    substantiveMessages, groundingResult.clusters, threadCount,
-    totalMessagesBeforeSampling, false, nonSubstantiveCount, filteringBreakdown,
-    deliberation
+    extractedOpinions || [], analyzedClusters, threadCount
   );
 
   // Synthesize insights
   step++;
   updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
+  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const synthesizerResult = await synthesizeReport(
-    groundingResult.clusters, analyzerResult.statistics, apiUrl, model, language
+    analyzedClusters, analyzerResult.statistics, apiUrl, model, language
   );
   console.log(
     `[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`
   );
 
-  // Generate visualization
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
-  const visualizerResult = await generateVisualizationData(
-    groundingResult.clusters, analyzerResult.statistics, clustererResult.visualization
-  );
-  console.log(`[ReportPipeline] Generated visualization data`);
+  // Build sources from conversation segments
+  const sourceMap = new Map<string, number>();
+  for (const seg of conversationSegments || []) {
+    sourceMap.set(seg.threadId, (sourceMap.get(seg.threadId) || 0) + 1);
+  }
+  const sources: Source[] = Array.from(sourceMap.entries()).map(([id, segmentCount]) => ({
+    id,
+    segmentCount,
+  }));
 
-  // Generate dot grid
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
-  const dotGridData = generateDotGridData(
-    groundingResult.clusters, clustererResult.visualization
-  );
-  console.log(`[ReportPipeline] Generated dot grid: ${dotGridData.totalMessages} points, ${dotGridData.totalUniqueUsers} users`);
+  // Build final report — strip internal messages from topics
+  const topics = analyzedClusters.map(({ messages, ...topic }) => topic);
 
-  // Render markdown
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${steps[step - 1]}`);
-  const rendererResult = renderMarkdown(
-    analyzerResult.statistics, groundingResult.clusters, synthesizerResult.synthesis,
-    { timezone: params.timezone, language: params.language }
-  );
-
-  // Build report
   const report: Report = {
-    id: reportId,
     title,
-    createdAt: Date.now(),
+    description: params.description || "",
+    date: new Date().toISOString(),
+    topics,
+    sources,
     statistics: analyzerResult.statistics,
-    clusters: groundingResult.clusters,
     synthesis: synthesizerResult.synthesis,
-    visualization: visualizerResult.visualization,
-    dotGrid: dotGridData,
-    markdown: rendererResult.markdown,
-    ...(extractedOpinions && { extractedOpinions }),
-    ...(conversationSegments && { conversationSegments }),
   };
 
   // Validation
@@ -464,8 +318,8 @@ async function runSharedPipeline(opts: {
   }
 
   console.log(
-    `[ReportPipeline] Validation passed: ${report.clusters.length} clusters, ` +
-    `${report.statistics.totalMessages} messages`
+    `[ReportPipeline] Validation passed: ${report.topics.length} topics, ` +
+    `${report.statistics.totalOpinions} opinions`
   );
   console.log(`[ReportPipeline] Report generation completed`);
   return report;
@@ -475,51 +329,31 @@ async function runSharedPipeline(opts: {
  * Create an empty report when no messages are found
  */
 function createEmptyReport(
-  reportId: string,
   title: string,
   threadCount: number
 ): Report {
   return {
-    id: reportId,
     title,
-    createdAt: Date.now(),
+    description: "",
+    date: new Date().toISOString(),
+    topics: [],
+    sources: [],
     statistics: {
-      totalMessages: 0,
+      totalOpinions: 0,
       totalThreads: threadCount,
       dateRange: { start: Date.now(), end: Date.now() },
-      categoryDistribution: {},
-      sentimentDistribution: { positive: 0, negative: 0, neutral: 0 },
+      stanceDistribution: {},
       topTopics: [],
-      averageMessagesPerThread: 0,
-      totalMessagesBeforeSampling: 0,
-      wasSampled: false,
-      nonSubstantiveCount: 0,
+      deliberation: { totalOpinions: 0, evolvedCount: 0 },
     },
-    clusters: [],
-    markdown: "# Report\n\nNo user messages found to analyze.",
   };
 }
 
 // Export pipeline components
-export { parseThreads } from "./parser";
 export { parseConversations } from "./conversationParser";
 export { extractOpinions } from "./opinionExtractor";
 export { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder } from "./embedder";
-export {
-  categorizeByEmbedding,
-  categorizeEmbeddedMessages,
-  initializeCategoryEmbeddings,
-} from "./categorizer";
 export { clusterByEmbedding, kMeans } from "./clusterer";
-export { addSubtopicsToAllClusters, clusterSubtopics, countUniqueUsers } from "./subtopicClusterer";
 export { analyzeClusters } from "./clusterAnalyzer";
-export { groundOpinions } from "./grounding";
 export { synthesizeReport } from "./synthesizer";
 export { analyzeData } from "./analyzer";
-export { generateVisualizationData } from "./visualizer";
-export { generateDotGridData } from "./dotGridGenerator";
-export { renderMarkdown } from "./renderer";
-
-// Legacy exports for backward compatibility
-export { categorizeMessages } from "./categorizer.legacy";
-export { clusterMessages } from "./clusterer.legacy";

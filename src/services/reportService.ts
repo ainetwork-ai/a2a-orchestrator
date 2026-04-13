@@ -16,6 +16,39 @@ import {
 const JOB_PREFIX = "report:job:";
 const CACHE_PREFIX = "report:cache:";
 
+/**
+ * Check if a report uses the legacy format (pre-EPIC3).
+ * Legacy reports have `clusters` instead of `topics`.
+ */
+function isLegacyReport(report: unknown): boolean {
+  const raw = report as Record<string, unknown>;
+  return !Array.isArray(raw.topics) && Array.isArray(raw.clusters);
+}
+
+/**
+ * Build reportSummary for job listing, handling both legacy and current formats.
+ */
+function buildReportSummary(report: unknown): ReportJobSummary["reportSummary"] {
+  const raw = report as Record<string, unknown>;
+
+  if (isLegacyReport(report)) {
+    const stats = raw.statistics as Record<string, unknown> | undefined;
+    const clusters = raw.clusters as unknown[] | undefined;
+    return {
+      totalOpinions: (stats?.totalMessages as number) || 0,
+      topicCount: clusters?.length || 0,
+      dateRange: stats?.dateRange as { start: number; end: number } | undefined,
+    };
+  }
+
+  const typed = report as Report;
+  return {
+    totalOpinions: typed.statistics.totalOpinions,
+    topicCount: typed.topics.length,
+    dateRange: typed.statistics.dateRange,
+  };
+}
+
 class ReportService {
   private static instance: ReportService;
   private jobs: Map<string, ReportJob> = new Map();
@@ -205,13 +238,7 @@ class ReportService {
         title: job.title,
         description: job.description,
         tags: job.tags,
-        reportSummary: job.report
-          ? {
-              totalMessages: job.report.statistics.totalMessages,
-              topicCount: job.report.clusters.length,
-              dateRange: job.report.statistics.dateRange,
-            }
-          : undefined,
+        reportSummary: job.report ? buildReportSummary(job.report) : undefined,
       }));
 
       return {
