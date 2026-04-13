@@ -15,6 +15,29 @@ interface QueuedRequest {
   reject: (error: Error) => void;
 }
 
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 1000;
+
+class HttpError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+function isRetryableError(error: unknown): boolean {
+  // HTTP 429 (rate limit) or 5xx (server error)
+  if (error instanceof HttpError) {
+    return error.status === 429 || error.status >= 500;
+  }
+  // Network-level errors (socket closed, connection reset, etc.)
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    return msg.includes("socket") || msg.includes("fetch failed") || msg.includes("econnreset") || msg.includes("etimedout");
+  }
+  return false;
+}
+
 class RequestManager {
   private static instance: RequestManager;
   private queue: QueuedRequest[] = [];
@@ -77,7 +100,7 @@ class RequestManager {
     );
 
     try {
-      const result = await this.executeRequest(request);
+      const result = await this.executeWithRetry(request);
       request.resolve(result);
     } catch (error) {
       request.reject(error as Error);
@@ -89,6 +112,31 @@ class RequestManager {
       // Process next request in queue
       this.processQueue();
     }
+  }
+
+  private async executeWithRetry(request: QueuedRequest): Promise<string> {
+    let lastError: Error = new Error("executeWithRetry: no attempts made");
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this.executeRequest(request);
+      } catch (error) {
+        lastError = error as Error;
+
+        if (attempt < MAX_RETRIES && isRetryableError(error)) {
+          const jitter = 0.5 + Math.random() * 0.5;
+          const delay = Math.round(RETRY_BASE_DELAY_MS * Math.pow(2, attempt) * jitter);
+          console.warn(
+            `[RequestManager] Retryable error (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay}ms: ${lastError.message}`
+          );
+          await new Promise((r) => setTimeout(r, delay));
+        } else {
+          break;
+        }
+      }
+    }
+
+    throw lastError;
   }
 
   private async executeRequest(request: QueuedRequest): Promise<string> {
@@ -114,7 +162,8 @@ class RequestManager {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(
+      throw new HttpError(
+        response.status,
         `API request failed: ${response.status} ${response.statusText} - ${errorBody}`
       );
     }
