@@ -26,11 +26,13 @@ export interface Reference {
 }
 
 /**
- * Quote from a conversation — the original user message backing a claim
+ * Quote from a conversation — the original user message backing a claim,
+ * with surrounding conversation context (agent questions + user responses)
  */
 export interface Quote {
   id: string;
-  text: string;              // original user message content
+  text: string;              // the key message content
+  context: SegmentMessage[]; // full conversation segment (agent + user messages)
   reference: Reference;
 }
 

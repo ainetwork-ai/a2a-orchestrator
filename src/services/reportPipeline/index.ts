@@ -216,9 +216,10 @@ async function runSharedPipeline(opts: {
 
   // Map ExtractedOpinions → Claims (no LLM — already grounded at extraction)
   if (extractedOpinions) {
-    const segmentMap = new Map(
+    // messageId → { content, segment } for quote text + conversation context
+    const messageMap = new Map(
       (conversationSegments || []).flatMap((seg) =>
-        seg.messages.map((m) => [m.id, { content: m.content }])
+        seg.messages.map((m) => [m.id, { content: m.content, segment: seg }])
       )
     );
     const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
@@ -228,17 +229,21 @@ async function runSharedPipeline(opts: {
         .map((m) => {
           const op = opinionMap.get(m.id)!;
           const quotes: Quote[] = op.source.keyMessageIds
-            .filter((msgId) => segmentMap.has(msgId))
-            .map((msgId) => ({
-              id: msgId,
-              text: segmentMap.get(msgId)!.content,
-              reference: {
-                id: `ref-${msgId}`,
-                sourceId: op.threadId,
-                segmentId: op.source.segmentId,
-                messageId: msgId,
-              },
-            }));
+            .filter((msgId) => messageMap.has(msgId))
+            .map((msgId) => {
+              const { content, segment } = messageMap.get(msgId)!;
+              return {
+                id: msgId,
+                text: content,
+                context: segment.messages,
+                reference: {
+                  id: `ref-${msgId}`,
+                  sourceId: op.threadId,
+                  segmentId: op.source.segmentId,
+                  messageId: msgId,
+                },
+              };
+            });
           return {
             id: op.id,
             title: op.statement,

@@ -212,8 +212,20 @@ Invalidate report cache.
 ```typescript
 {
   id: string;
-  text: string;                    // original user message content
+  text: string;                    // the key message content
+  context: SegmentMessage[];       // full conversation segment (agent + user messages)
   reference: Reference;
+}
+```
+
+### SegmentMessage
+```typescript
+{
+  id: string;
+  speaker: string;                 // "User" | agent name
+  content: string;
+  timestamp: number;
+  isUser: boolean;
 }
 ```
 
