@@ -121,8 +121,10 @@ async function extractFromSegment(
 
     const messageIdSet = new Set(segment.messages.map((m) => m.id));
 
+    // Take at most 1 opinion per segment (defense against LLM returning multiple)
     const opinions = (parsed.opinions || [])
       .filter((op) => op.statement && op.statement.trim().length > 0)
+      .slice(0, 1)
       .map((op) => ({
         id: uuidv4(),
         speaker: op.speaker || "User",
@@ -172,10 +174,10 @@ ${langInstruction}
 ${conversationLines.join("\n")}
 
 ## Instructions
-Extract opinions from ALL participants in the conversation — both users and AI agents. Every participant's ideas are equally valuable.
+Extract exactly ONE consolidated opinion that best represents the core discussion point of this conversation segment. Synthesize the perspectives of all participants (user and AI agents) into a single, comprehensive claim.
 
-For each opinion:
-1. Identify the speaker (use the exact name from the conversation: "User" or the agent's name)
+For the opinion:
+1. Identify the speaker who made the most central point (use "User" or the agent's exact name). Other participants' perspectives should be reflected in the quote.
 2. Write a concise, debatable claim that others could agree or disagree with. Write it in the same language as the conversation.
 3. Determine the stance: "support", "oppose", "neutral", "request", or "question"
 4. Rate confidence using this guide:
@@ -184,32 +186,29 @@ For each opinion:
    - 0.3-0.5: weak preference or questioning ("maybe?", "what about", "혹시 ~?", "~도 괜찮을까")
    - 0.1-0.2: barely expressed, speculative
 5. Set evolved:
-   - true ONLY when the user's position clearly shifted during the conversation (e.g., initially opposed then agreed, or stance changed after agent's explanation)
-   - false when the user elaborates on the same opinion with more detail or provides additional information without changing stance
-6. Provide a concise quote from the conversation that best supports this opinion. Use "[...]" to skip less relevant parts. The quote must be from the actual conversation above.
+   - true ONLY when a participant's position clearly shifted during the conversation
+   - false when they elaborate on the same opinion with more detail
+6. Provide a concise quote from the conversation that best supports this opinion. Use "[...]" to skip less relevant parts.
 7. List the message IDs (from the conversation above) that are the basis for this opinion
 
 ## Quality Rules
 CRITICAL — follow these strictly:
-- Extract ZERO opinions for vague, meandering utterances that lack a clear point
-- Extract ZERO opinions for anecdotes without a broader principle or stance
-- ONLY extract opinions that represent genuinely debatable positions
-- DO NOT extract: platitudes ("communication is important"), mere descriptions of experience without a stance, minor variations of the same idea, or questions without clear stances
-- If similar points are made, treat them as ONE opinion rather than separate ones. Only separate truly distinct topics.
-- If unsure whether something is a substantial opinion, err on the side of extracting NOTHING. Less noise is better than more coverage.
+- You MUST return exactly ONE opinion. If the segment covers multiple topics, choose the most substantive one.
+- Return ZERO opinions (empty array) if the segment contains only greetings, thanks, small talk, or no debatable positions.
+- ONLY extract opinions that represent genuinely debatable positions.
+- DO NOT extract: platitudes, mere descriptions of experience without a stance, or questions without clear stances.
 - Rhetorical questions imply a stance (e.g., "isn't it too slow?" = oppose)
 - Personal stories often carry implicit opinions (e.g., "I tried it and closed it immediately" = oppose)
 - Passive acceptance ("I guess so", "뭐... 그럴 수도") = low confidence, not strong support
 - If a user says "yes" or "I agree" in response to an agent, infer what they agree with and write it as a complete statement.
-- Skip greetings, thanks, and other non-opinion utterances.
 
-Respond in JSON format only:
+Respond in JSON format only. Return exactly ONE item in the array, or an empty array:
 {
   "opinions": [
     {
       "speaker": "User",
-      "statement": "다른 사람이 동의/반대할 수 있는 구체적인 주장",
-      "quote": "대화에서 발췌한 핵심 인용문",
+      "statement": "이 대화 세그먼트의 핵심 주장을 종합한 문장",
+      "quote": "대화에서 발췌한 핵심 인용문 [...] 생략 가능",
       "stance": "request",
       "confidence": 0.8,
       "evolved": false,

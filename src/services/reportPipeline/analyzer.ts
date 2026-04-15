@@ -8,9 +8,11 @@ export function analyzeData(
   opinions: ExtractedOpinion[],
   clusters: PipelineTopic[],
   threadCount: number,
+  segmentCount: number,
 ): AnalyzerResult {
   const statistics: ReportStatistics = {
     totalOpinions: opinions.length,
+    totalSegments: segmentCount,
     totalThreads: threadCount,
     dateRange: calculateDateRange(opinions),
     stanceDistribution: calculateStanceDistribution(opinions),

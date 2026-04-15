@@ -23,6 +23,7 @@ import {
   ReportRequestParams,
   ReportJobProgress,
   ReportLanguage,
+  ParsedMessage,
   Source,
   Claim,
   Quote,
@@ -38,9 +39,11 @@ export type ProgressCallback = (progress: ReportJobProgress) => void;
  * Pipeline steps
  */
 const PIPELINE_STEPS = [
-  "Parsing conversations",
-  "Extracting opinions",
-  "Generating embeddings",
+  "Collecting messages",
+  "Embedding messages",
+  "Segmenting by topic",
+  "Extracting claims",
+  "Embedding claims",
   "Clustering",
   "Analyzing clusters",
   "Calculating statistics",
@@ -102,26 +105,52 @@ export async function generateReport(
 
   const updateProgress = makeProgressUpdater(PIPELINE_STEPS, onProgress);
 
-  // Step 1: Parse conversations into segments
+  const embedder = getEmbedder();
+
+  // Step 1: Collect raw messages from threads (before segmentation)
   updateProgress(1);
   console.log(`[ReportPipeline] Step 1: ${PIPELINE_STEPS[0]}`);
-  const conversationResult = await parseConversations(params);
+  const rawResult = await parseConversations(params);
   console.log(
-    `[ReportPipeline] Parsed ${conversationResult.segments.length} segments from ${conversationResult.threadCount} threads`
+    `[ReportPipeline] Collected ${rawResult.totalMessages} messages from ${rawResult.threadCount} threads`
+  );
+
+  if (rawResult.segments.length === 0) {
+    return createEmptyReport(title, rawResult.threadCount);
+  }
+
+  // Step 2: Embed raw messages for topic-based segmentation
+  updateProgress(2);
+  console.log(`[ReportPipeline] Step 2: ${PIPELINE_STEPS[1]}`);
+  const allRawMessages: ParsedMessage[] = rawResult.segments.flatMap((seg) =>
+    seg.messages.map((m) => ({ id: m.id, threadId: seg.threadId, content: m.content, timestamp: m.timestamp }))
+  );
+  const rawEmbedResult = await embedMessages(allRawMessages, embedder);
+  const embeddingMap = new Map(rawEmbedResult.messages.map((m) => [m.id, m.embedding]));
+  console.log(
+    `[ReportPipeline] Embedded ${rawEmbedResult.messages.length} messages (${rawEmbedResult.cacheHits} cached)`
+  );
+
+  // Step 3: Re-segment with topic awareness (cosine similarity)
+  updateProgress(3);
+  console.log(`[ReportPipeline] Step 3: ${PIPELINE_STEPS[2]}`);
+  const conversationResult = await parseConversations(params, embeddingMap);
+  console.log(
+    `[ReportPipeline] Segmented into ${conversationResult.segments.length} topic-based segments`
   );
 
   if (conversationResult.segments.length === 0) {
     return createEmptyReport(title, conversationResult.threadCount);
   }
 
-  // Step 2: Extract opinions from segments using LLM
-  updateProgress(2);
-  console.log(`[ReportPipeline] Step 2: ${PIPELINE_STEPS[1]}`);
+  // Step 4: Extract 1 claim per segment using LLM
+  updateProgress(4);
+  console.log(`[ReportPipeline] Step 4: ${PIPELINE_STEPS[3]}`);
   const extractionResult = await extractOpinions(
     conversationResult.segments, apiUrl, model, language
   );
   console.log(
-    `[ReportPipeline] Extracted ${extractionResult.opinions.length} opinions ` +
+    `[ReportPipeline] Extracted ${extractionResult.opinions.length} claims from ${conversationResult.segments.length} segments ` +
     `(${extractionResult.failedSegments} failed, ${extractionResult.evolvedOpinionCount} evolved)`
   );
 
@@ -129,22 +158,21 @@ export async function generateReport(
     return createEmptyReport(title, conversationResult.threadCount);
   }
 
-  // Step 3: Generate embeddings for opinion statements
-  updateProgress(3);
-  console.log(`[ReportPipeline] Step 3: ${PIPELINE_STEPS[2]}`);
-  const embedder = getEmbedder();
+  // Step 5: Embed claims for clustering
+  updateProgress(5);
+  console.log(`[ReportPipeline] Step 5: ${PIPELINE_STEPS[4]}`);
   const parsedMessages = opinionsToParsedMessages(extractionResult.opinions);
   const embeddingResult = await embedMessages(parsedMessages, embedder);
   console.log(
-    `[ReportPipeline] Embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
+    `[ReportPipeline] Claim embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
   );
 
-  // Steps 4-7: shared pipeline
+  // Steps 6-9: shared pipeline
   return runSharedPipeline({
     title, language, params, apiUrl, model,
     substantiveMessages: embeddingResult.messages,
     threadCount: conversationResult.threadCount,
-    onProgress, stepOffset: 3,
+    onProgress, stepOffset: 5,
     extractedOpinions: extractionResult.opinions,
     conversationSegments: conversationResult.segments,
   });
@@ -264,7 +292,8 @@ async function runSharedPipeline(opts: {
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const analyzerResult = analyzeData(
-    extractedOpinions || [], analyzedClusters, threadCount
+    extractedOpinions || [], analyzedClusters, threadCount,
+    conversationSegments?.length || 0
   );
 
   // Synthesize insights
@@ -341,6 +370,7 @@ function createEmptyReport(
     sources: [],
     statistics: {
       totalOpinions: 0,
+      totalSegments: 0,
       totalThreads: threadCount,
       dateRange: { start: Date.now(), end: Date.now() },
       stanceDistribution: {},

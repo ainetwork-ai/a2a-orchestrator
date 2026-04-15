@@ -80,6 +80,7 @@ export interface Source {
 
 export interface ReportStatistics {
   totalOpinions: number;
+  totalSegments: number;
   totalThreads: number;
   dateRange: {
     start: number;

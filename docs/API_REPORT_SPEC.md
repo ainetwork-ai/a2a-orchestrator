@@ -251,9 +251,11 @@ Invalidate report cache.
 ```typescript
 {
   totalOpinions: number;
+  totalSegments: number;             // conversation segments analyzed
   totalThreads: number;
   dateRange: { start: number; end: number };
   stanceDistribution: Record<string, number>;
+  speakerDistribution: Record<string, number>;
   topTopics: Array<{ topic: string; count: number; percentage: number }>;
   deliberation: { totalOpinions: number; evolvedCount: number };
 }
@@ -297,12 +299,14 @@ Invalidate report cache.
 
 ---
 
-## Pipeline Steps (7 total, 3 LLM calls)
+## Pipeline Steps (9 total, 3 LLM calls)
 
-1. Parse conversations → ConversationSegment[]
-2. Extract opinions (LLM) → ExtractedOpinion[]
-3. Generate embeddings → EmbeddedMessage[]
-4. Cluster (UMAP + K-means) → Topic[]
-5. Analyze clusters (LLM) → topic labels, summaries
-6. Calculate statistics → ReportStatistics
-7. Synthesize insights (LLM) → ReportSynthesis
+1. Collect messages from threads
+2. Embed raw messages (for topic-based segmentation)
+3. Segment by topic (cosine similarity + physical criteria)
+4. Extract 1 claim per segment (LLM) — 0 if no debatable position
+5. Embed claims (for clustering)
+6. Cluster (UMAP + K-means) → Topic[]
+7. Analyze clusters (LLM) → topic labels, summaries
+8. Calculate statistics → ReportStatistics
+9. Synthesize insights (LLM) → ReportSynthesis

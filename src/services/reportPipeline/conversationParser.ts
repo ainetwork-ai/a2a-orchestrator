@@ -24,12 +24,28 @@ import { filterThreads, resolveDateRange, anonymizeContent } from "./pipelineUti
 // Segment splitting constants
 export const SEGMENT_TIME_GAP_MS = 5 * 60 * 1000; // 5 minutes
 export const MAX_SEGMENT_MESSAGES = 20;
+export const TOPIC_SHIFT_THRESHOLD = 0.65; // cosine similarity below this = topic change
+
+/**
+ * Cosine similarity between two vectors
+ */
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
 
 /**
  * Parse threads into conversation segments (user + agent messages preserved)
  */
 export async function parseConversations(
-  params: ReportRequestParams
+  params: ReportRequestParams,
+  embeddings?: Map<string, number[]>
 ): Promise<ConversationParserResult> {
   console.log("[ConversationParser] Starting with params:", JSON.stringify(params));
 
@@ -59,7 +75,7 @@ export async function parseConversations(
 
     dateFiltered.sort((a, b) => a.timestamp - b.timestamp);
 
-    let segments = splitIntoSegments(dateFiltered, thread.id);
+    let segments = splitIntoSegments(dateFiltered, thread.id, embeddings);
 
     // Filter segments to only those where the requested agent(s) participated
     segments = filterSegmentsByAgent(segments, params);
@@ -87,7 +103,8 @@ export async function parseConversations(
  */
 function splitIntoSegments(
   messages: Message[],
-  threadId: string
+  threadId: string,
+  embeddings?: Map<string, number[]>
 ): ConversationSegment[] {
   if (messages.length === 0) return [];
 
@@ -124,7 +141,18 @@ function splitIntoSegments(
       currentNonUserSpeaker !== lastNonUserSpeaker;
     const maxReached = currentMessages.length >= MAX_SEGMENT_MESSAGES;
 
-    if (currentMessages.length > 0 && (timeGap || agentChanged || maxReached)) {
+    // Topic shift detection via embedding cosine similarity
+    let topicShift = false;
+    if (embeddings && currentMessages.length > 0) {
+      const lastMsg = currentMessages[currentMessages.length - 1];
+      const lastEmb = embeddings.get(lastMsg.id);
+      const currEmb = embeddings.get(msg.id);
+      if (lastEmb && currEmb) {
+        topicShift = cosineSimilarity(lastEmb, currEmb) < TOPIC_SHIFT_THRESHOLD;
+      }
+    }
+
+    if (currentMessages.length > 0 && (timeGap || agentChanged || maxReached || topicShift)) {
       flushSegment();
     }
 
