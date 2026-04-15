@@ -24,7 +24,7 @@ import { filterThreads, resolveDateRange, anonymizeContent } from "./pipelineUti
 // Segment splitting constants
 export const SEGMENT_TIME_GAP_MS = 5 * 60 * 1000; // 5 minutes
 export const MAX_SEGMENT_MESSAGES = 20;
-export const TOPIC_SHIFT_THRESHOLD = 0.65; // cosine similarity below this = topic change
+export const TOPIC_SHIFT_THRESHOLD = 0.4; // cosine similarity below this = topic change (0.65 was too aggressive)
 
 /**
  * Cosine similarity between two vectors
