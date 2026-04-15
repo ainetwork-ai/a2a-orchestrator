@@ -52,6 +52,7 @@ Overall Statistics:
 - Total opinions extracted: ${statistics.totalOpinions}
 - Total threads: ${statistics.totalThreads}
 - Stance distribution: ${JSON.stringify(statistics.stanceDistribution)}
+- Speaker distribution: ${JSON.stringify(statistics.speakerDistribution)}
 
 Topic Analyses:
 ${JSON.stringify(clusterSummaries, null, 2)}

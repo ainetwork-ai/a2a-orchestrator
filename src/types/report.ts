@@ -42,6 +42,7 @@ export interface Quote {
  */
 export interface Claim {
   id: string;
+  speaker: string;           // "User" or agent name
   title: string;             // self-contained opinion statement
   quotes: Quote[];           // original messages backing this claim
   number: number;            // mention count (= quotes.length)
@@ -85,6 +86,7 @@ export interface ReportStatistics {
     end: number;
   };
   stanceDistribution: Record<string, number>;
+  speakerDistribution: Record<string, number>;
   topTopics: Array<{
     topic: string;
     count: number;
@@ -265,10 +267,12 @@ export interface OpinionSource {
 
 export interface ExtractedOpinion {
   id: string;
+  speaker: string;           // "User" or agent name
   statement: string;
   stance: "support" | "oppose" | "neutral" | "request" | "question";
   confidence: number;
   evolved: boolean;
+  quote?: string;            // LLM-extracted concise quote from conversation
   source: OpinionSource;
   timestamp: number;
   threadId: string;

@@ -210,7 +210,7 @@ async function runSharedPipeline(opts: {
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const analyzedClusters = await analyzeClusters(
-    clustererResult.clusters, apiUrl, model, language
+    clustererResult.clusters, apiUrl, model, language, extractedOpinions
   );
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
@@ -234,7 +234,7 @@ async function runSharedPipeline(opts: {
               const { content, segment } = messageMap.get(msgId)!;
               return {
                 id: msgId,
-                text: content,
+                text: op.quote || content,
                 context: segment.messages,
                 reference: {
                   id: `ref-${msgId}`,
@@ -246,6 +246,7 @@ async function runSharedPipeline(opts: {
             });
           return {
             id: op.id,
+            speaker: op.speaker,
             title: op.statement,
             quotes,
             number: quotes.length,
@@ -343,6 +344,7 @@ function createEmptyReport(
       totalThreads: threadCount,
       dateRange: { start: Date.now(), end: Date.now() },
       stanceDistribution: {},
+      speakerDistribution: {},
       topTopics: [],
       deliberation: { totalOpinions: 0, evolvedCount: 0 },
     },

@@ -14,6 +14,7 @@ export function analyzeData(
     totalThreads: threadCount,
     dateRange: calculateDateRange(opinions),
     stanceDistribution: calculateStanceDistribution(opinions),
+    speakerDistribution: calculateSpeakerDistribution(opinions),
     topTopics: calculateTopTopics(clusters),
     deliberation: {
       totalOpinions: opinions.length,
@@ -35,6 +36,15 @@ function calculateDateRange(opinions: ExtractedOpinion[]): { start: number; end:
     start: Math.min(...timestamps),
     end: Math.max(...timestamps),
   };
+}
+
+function calculateSpeakerDistribution(opinions: ExtractedOpinion[]): Record<string, number> {
+  const distribution: Record<string, number> = {};
+  for (const op of opinions) {
+    const speaker = op.speaker || "User";
+    distribution[speaker] = (distribution[speaker] || 0) + 1;
+  }
+  return distribution;
 }
 
 function calculateStanceDistribution(opinions: ExtractedOpinion[]): Record<string, number> {

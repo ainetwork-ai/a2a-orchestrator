@@ -93,7 +93,6 @@ function splitIntoSegments(
 
   const segments: ConversationSegment[] = [];
   let currentMessages: SegmentMessage[] = [];
-  let hasUserMessage = false;
   let lastTimestamp = messages[0].timestamp;
   // Tracks the last agent speaker to detect agent changes within a segment.
   // Retains its value across user messages intentionally — a user speaking
@@ -103,18 +102,15 @@ function splitIntoSegments(
   const flushSegment = () => {
     if (currentMessages.length === 0) return;
 
-    if (hasUserMessage) {
-      segments.push({
-        id: uuidv4(),
-        threadId,
-        messages: currentMessages,
-        startTimestamp: currentMessages[0].timestamp,
-        endTimestamp: currentMessages[currentMessages.length - 1].timestamp,
-      });
-    }
+    segments.push({
+      id: uuidv4(),
+      threadId,
+      messages: currentMessages,
+      startTimestamp: currentMessages[0].timestamp,
+      endTimestamp: currentMessages[currentMessages.length - 1].timestamp,
+    });
 
     currentMessages = [];
-    hasUserMessage = false;
   };
 
   for (const msg of messages) {
@@ -142,7 +138,6 @@ function splitIntoSegments(
       isUser,
     });
 
-    if (isUser) hasUserMessage = true;
     lastTimestamp = msg.timestamp;
     if (currentNonUserSpeaker !== null) {
       lastNonUserSpeaker = currentNonUserSpeaker;

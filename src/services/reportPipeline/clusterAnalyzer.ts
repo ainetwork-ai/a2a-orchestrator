@@ -16,6 +16,7 @@ import {
   ParsedMessage,
   ClusterSummary,
   ReportLanguage,
+  ExtractedOpinion,
 } from "../../types/report";
 import { PipelineTopic } from "./clusterer";
 import { parseJsonResponse } from "../../utils/llm";
@@ -44,7 +45,8 @@ export async function analyzeClusters(
   clusters: PipelineTopic[],
   apiUrl: string,
   model: string,
-  language: ReportLanguage = "ko"
+  language: ReportLanguage = "ko",
+  extractedOpinions?: ExtractedOpinion[]
 ): Promise<PipelineTopic[]> {
   console.log(`[ClusterAnalyzer] Analyzing ${clusters.length} clusters`);
 
@@ -53,10 +55,13 @@ export async function analyzeClusters(
   }
 
   const allMessages = clusters.flatMap((c) => c.messages);
+  const opinionMap = extractedOpinions
+    ? new Map(extractedOpinions.map((op) => [op.id, op]))
+    : undefined;
 
   const analyzedClusters = await Promise.all(
     clusters.map((cluster) =>
-      analyzeCluster(cluster, allMessages, apiUrl, model, language)
+      analyzeCluster(cluster, allMessages, apiUrl, model, language, opinionMap)
     )
   );
 
@@ -73,15 +78,29 @@ async function analyzeCluster(
   allMessages: ParsedMessage[],
   apiUrl: string,
   model: string,
-  language: ReportLanguage
+  language: ReportLanguage,
+  opinionMap?: Map<string, ExtractedOpinion>
 ): Promise<PipelineTopic> {
   const clusterId = cluster.id || uuidv4();
 
-  // Build inside examples (from this cluster)
-  const insideExamples = cluster.messages
-    .slice(0, ANALYZER_CONFIG.maxInsideExamples)
-    .map((m) => `- "${truncate(m.content, ANALYZER_CONFIG.maxContentLength)}"`)
-    .join("\n");
+  // Build opinion context with stance/confidence metadata
+  const opinionContext = opinionMap
+    ? cluster.messages
+        .filter((m) => opinionMap.has(m.id))
+        .map((m) => {
+          const op = opinionMap.get(m.id)!;
+          return `- "${truncate(op.statement, ANALYZER_CONFIG.maxContentLength)}" (${op.stance}, confidence: ${op.confidence})`;
+        })
+        .join("\n")
+    : null;
+
+  // Build inside examples as fallback (when no opinion metadata)
+  const insideExamples = !opinionContext
+    ? cluster.messages
+        .slice(0, ANALYZER_CONFIG.maxInsideExamples)
+        .map((m) => `- "${truncate(m.content, ANALYZER_CONFIG.maxContentLength)}"`)
+        .join("\n")
+    : null;
 
   // Build outside examples (from other clusters, for contrast)
   const outsideMessages = allMessages.filter(
@@ -98,6 +117,10 @@ async function analyzeCluster(
       ? "CRITICAL: You MUST write ALL text content in Korean (한국어). Even if the input messages are in English, your output MUST be in Korean. Do NOT write any text in English."
       : "Write all text content in English.";
 
+  const insideSection = opinionContext
+    ? `## Opinions extracted from conversations (with stance and confidence):\n${opinionContext}`
+    : `## Examples INSIDE this cluster:\n${insideExamples}`;
+
   const prompt = `You are analyzing a cluster of user feedback messages.
 
 ${langInstruction}
@@ -108,8 +131,7 @@ Total messages in cluster: ${cluster.messages.length}
 ## Examples OUTSIDE this cluster (for contrast):
 ${outsideExamples || "No outside examples available"}
 
-## Examples INSIDE this cluster:
-${insideExamples}
+${insideSection}
 
 ## Tasks
 Based on the contrast between messages inside and outside the cluster, provide:
