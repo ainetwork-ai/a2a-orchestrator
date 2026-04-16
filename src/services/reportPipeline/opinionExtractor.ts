@@ -246,14 +246,16 @@ ${conversationLines.join("\n")}
 
 ## Instructions
 Read the entire conversation above. Identify the distinct topics discussed.
-For each topic, extract exactly ONE consolidated claim that represents the core point.
+For each topic, extract exactly ONE claim that represents where the conversation LANDED — the final position, conclusion, or decision that emerged, not an intermediate reaction.
+
+The conversation is in chronological order. Later messages reflect the participant's final position after considering earlier discussion. Earlier messages may contain initial reactions that were later revised or superseded. Always prefer the conclusion over intermediate opinions.
 
 A "topic" is a coherent subject of discussion — multiple back-and-forth turns about the same subject count as ONE topic, not multiple.
 
 For each claim:
 1. Identify the topic name (2-5 words)
 2. Identify the speaker who made the most central point (use "User" or the agent's exact name). Other participants' perspectives should be reflected in the quote.
-3. Write a concise, debatable claim that others could agree or disagree with. Write it in the same language as the conversation.
+3. Write a concise, debatable claim that captures the FINAL stance on this topic — where the discussion ended up, not where it started. Write it in the same language as the conversation.
 4. Determine the stance: "support", "oppose", "neutral", "request", or "question"
 5. Rate confidence using this guide:
    - 0.9+: explicit, decisive expressions ("must", "absolutely", "반드시", "절대")

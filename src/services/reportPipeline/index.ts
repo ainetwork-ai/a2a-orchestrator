@@ -233,7 +233,7 @@ async function runSharedPipeline(opts: {
         const validMsgIds = op.source.keyMessageIds.filter((msgId) => messageMap.has(msgId));
         const quotes: Quote[] = validMsgIds.map((msgId) => ({
           id: msgId,
-          text: op.quote || messageMap.get(msgId)!.content,
+          text: messageMap.get(msgId)!.content,
           reference: {
             id: `ref-${msgId}`,
             sourceId: op.threadId,
