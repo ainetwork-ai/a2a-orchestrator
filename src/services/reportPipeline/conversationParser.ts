@@ -41,16 +41,20 @@ function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 /**
- * Collect raw messages from threads without segmentation (for embedding before segmentation)
+ * Collect raw messages from threads grouped by thread ID.
  */
 export async function collectRawMessages(
   params: ReportRequestParams
-): Promise<{ messages: SegmentMessage[]; threadIds: string[]; threadCount: number }> {
+): Promise<{
+  threadCount: number;
+  totalMessageCount: number;
+  threadMessages: Map<string, SegmentMessage[]>;
+}> {
   const threads = filterThreads(params, "ConversationParser");
   const { startDate, endDate } = resolveDateRange(params);
 
-  const allMessages: SegmentMessage[] = [];
-  const threadIds: string[] = [];
+  const threadMessages = new Map<string, SegmentMessage[]>();
+  let totalMessageCount = 0;
   const threadManager = ThreadManager.getInstance();
 
   for (const thread of threads) {
@@ -64,10 +68,10 @@ export async function collectRawMessages(
 
     if (dateFiltered.length === 0) continue;
 
-    threadIds.push(thread.id);
+    const threadMsgs: SegmentMessage[] = [];
     for (const msg of dateFiltered) {
       const isUser = msg.speaker === "User";
-      allMessages.push({
+      threadMsgs.push({
         id: msg.id,
         speaker: msg.speaker,
         content: isUser ? anonymizeContent(msg.content.trim()) : msg.content.trim(),
@@ -75,9 +79,11 @@ export async function collectRawMessages(
         isUser,
       });
     }
+    threadMessages.set(thread.id, threadMsgs);
+    totalMessageCount += threadMsgs.length;
   }
 
-  return { messages: allMessages, threadIds, threadCount: threadIds.length };
+  return { threadCount: threadMessages.size, totalMessageCount, threadMessages };
 }
 
 /**
