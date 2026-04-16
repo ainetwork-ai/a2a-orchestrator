@@ -207,16 +207,7 @@ async function runSharedPipeline(opts: {
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Analyze clusters (LLM: topic labels, descriptions, summaries)
-  step++;
-  updateProgress(step);
-  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
-  const analyzedClusters = await analyzeClusters(
-    clustererResult.clusters, apiUrl, model, language, extractedOpinions
-  );
-  console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
-
-  // Map ExtractedOpinions → Claims (no LLM — already grounded at extraction)
+  // Map ExtractedOpinions → Claims before analysis (so analyzeClusters can use claims)
   const messageMap = new Map<string, { content: string; threadId: string }>();
   for (const [threadId, msgs] of threadMessages) {
     for (const m of msgs) {
@@ -225,7 +216,7 @@ async function runSharedPipeline(opts: {
   }
 
   const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
-  for (const cluster of analyzedClusters) {
+  for (const cluster of clustererResult.clusters) {
     cluster.claims = cluster.messages
       .filter((m) => opinionMap.has(m.id))
       .map((m) => {
@@ -241,7 +232,6 @@ async function runSharedPipeline(opts: {
             messageId: msgId,
           },
         }));
-        // Context: window of messages around keyMessageIds (not the entire thread)
         const context = buildContextWindow(threadMessages.get(op.threadId) || [], validMsgIds);
         return {
           id: op.id,
@@ -257,6 +247,15 @@ async function runSharedPipeline(opts: {
         } satisfies Claim;
       });
   }
+
+  // Analyze clusters (LLM: topic labels, descriptions, summaries — uses claims)
+  step++;
+  updateProgress(step);
+  console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
+  const analyzedClusters = await analyzeClusters(
+    clustererResult.clusters, apiUrl, model, language
+  );
+  console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
 
   // Calculate statistics
   step++;
@@ -274,9 +273,7 @@ async function runSharedPipeline(opts: {
   const synthesizerResult = await synthesizeReport(
     analyzedClusters, analyzerResult.statistics, apiUrl, model, language
   );
-  console.log(
-    `[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`
-  );
+  console.log(`[ReportPipeline] Synthesis completed`);
 
   // Build sources from threads (1 source per thread, segmentCount = 1 in thread-level mode)
   const sources: Source[] = Array.from(threadMessages.keys()).map((id) => ({

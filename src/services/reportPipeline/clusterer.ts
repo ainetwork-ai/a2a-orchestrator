@@ -112,8 +112,7 @@ export async function clusterByEmbedding(
       messages: msgs,
       claims: [],
       summary: {
-        consensus: [],
-        conflicting: [],
+        text: "",
         sentiment: "neutral" as const,
       },
     }));
@@ -226,8 +225,7 @@ function createSingleCluster(
     messages,
     claims: [],
     summary: {
-      consensus: [],
-      conflicting: [],
+      text: "",
       sentiment: "neutral",
     },
   };

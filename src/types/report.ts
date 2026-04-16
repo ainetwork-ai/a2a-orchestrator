@@ -53,8 +53,7 @@ export interface Claim {
 }
 
 export interface ClusterSummary {
-  consensus: string[];
-  conflicting: string[];
+  text: string;
   sentiment: "positive" | "negative" | "mixed" | "neutral";
 }
 
@@ -99,8 +98,6 @@ export interface ReportStatistics {
 }
 
 export interface ReportSynthesis {
-  overallSentiment: "positive" | "negative" | "mixed" | "neutral";
-  keyFindings: string[];
   executiveSummary: string;
 }
 
