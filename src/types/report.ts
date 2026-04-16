@@ -26,13 +26,11 @@ export interface Reference {
 }
 
 /**
- * Quote from a conversation — the original user message backing a claim,
- * with surrounding conversation context (agent questions + user responses)
+ * Quote from a conversation — an individual message backing a claim
  */
 export interface Quote {
   id: string;
   text: string;              // the key message content
-  context: SegmentMessage[]; // full conversation segment (agent + user messages)
   reference: Reference;
 }
 
@@ -45,6 +43,7 @@ export interface Claim {
   speaker: string;           // "User" or agent name
   title: string;             // self-contained opinion statement
   quotes: Quote[];           // original messages backing this claim
+  context: SegmentMessage[]; // full conversation segment (once per claim, not per quote)
   number: number;            // mention count (= quotes.length)
   similarClaims: Claim[];    // empty for now, T3C compatibility
   // AINSPACE extensions

@@ -197,8 +197,10 @@ Invalidate report cache.
 ```typescript
 {
   id: string;
+  speaker: string;                 // "User" or agent name
   title: string;                   // self-contained opinion statement
   quotes: Quote[];                 // original messages backing this claim
+  context: SegmentMessage[];       // full conversation segment (once per claim)
   number: number;                  // = quotes.length
   similarClaims: Claim[];          // [] (T3C compatibility, reserved)
   // AINSPACE extensions:
@@ -213,7 +215,6 @@ Invalidate report cache.
 {
   id: string;
   text: string;                    // the key message content
-  context: SegmentMessage[];       // full conversation segment (agent + user messages)
   reference: Reference;
 }
 ```

@@ -256,27 +256,25 @@ async function runSharedPipeline(opts: {
         .filter((m) => opinionMap.has(m.id))
         .map((m) => {
           const op = opinionMap.get(m.id)!;
-          const quotes: Quote[] = op.source.keyMessageIds
-            .filter((msgId) => messageMap.has(msgId))
-            .map((msgId) => {
-              const { content, segment } = messageMap.get(msgId)!;
-              return {
-                id: msgId,
-                text: op.quote || content,
-                context: segment.messages,
-                reference: {
-                  id: `ref-${msgId}`,
-                  sourceId: op.threadId,
-                  segmentId: op.source.segmentId,
-                  messageId: msgId,
-                },
-              };
-            });
+          const validMsgIds = op.source.keyMessageIds.filter((msgId) => messageMap.has(msgId));
+          const quotes: Quote[] = validMsgIds.map((msgId) => ({
+            id: msgId,
+            text: op.quote || messageMap.get(msgId)!.content,
+            reference: {
+              id: `ref-${msgId}`,
+              sourceId: op.threadId,
+              segmentId: op.source.segmentId,
+              messageId: msgId,
+            },
+          }));
+          // Context: segment messages from first valid keyMessageId (same segment, stored once)
+          const firstMsg = validMsgIds.length > 0 ? messageMap.get(validMsgIds[0]) : undefined;
           return {
             id: op.id,
             speaker: op.speaker,
             title: op.statement,
             quotes,
+            context: firstMsg?.segment.messages || [],
             number: quotes.length,
             similarClaims: [],
             stance: op.stance,
