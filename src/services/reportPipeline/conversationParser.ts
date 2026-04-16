@@ -41,6 +41,46 @@ function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 /**
+ * Collect raw messages from threads without segmentation (for embedding before segmentation)
+ */
+export async function collectRawMessages(
+  params: ReportRequestParams
+): Promise<{ messages: SegmentMessage[]; threadIds: string[]; threadCount: number }> {
+  const threads = filterThreads(params, "ConversationParser");
+  const { startDate, endDate } = resolveDateRange(params);
+
+  const allMessages: SegmentMessage[] = [];
+  const threadIds: string[] = [];
+  const threadManager = ThreadManager.getInstance();
+
+  for (const thread of threads) {
+    const world = threadManager.getWorld(thread.id);
+    if (!world) continue;
+
+    const history = world.getHistory();
+    const dateFiltered = history.filter(
+      (m) => m.timestamp >= startDate && m.timestamp <= endDate
+    );
+
+    if (dateFiltered.length === 0) continue;
+
+    threadIds.push(thread.id);
+    for (const msg of dateFiltered) {
+      const isUser = msg.speaker === "User";
+      allMessages.push({
+        id: msg.id,
+        speaker: msg.speaker,
+        content: isUser ? anonymizeContent(msg.content.trim()) : msg.content.trim(),
+        timestamp: msg.timestamp,
+        isUser,
+      });
+    }
+  }
+
+  return { messages: allMessages, threadIds, threadCount: threadIds.length };
+}
+
+/**
  * Parse threads into conversation segments (user + agent messages preserved)
  */
 export async function parseConversations(

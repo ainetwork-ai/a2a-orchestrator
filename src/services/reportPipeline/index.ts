@@ -10,7 +10,7 @@
  * 7. Synthesize insights (LLM)
  */
 
-import { parseConversations } from "./conversationParser";
+import { parseConversations, collectRawMessages } from "./conversationParser";
 import { extractOpinions } from "./opinionExtractor";
 import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
 import { clusterByEmbedding } from "./clusterer";
@@ -110,28 +110,28 @@ export async function generateReport(
   // Step 1: Collect raw messages from threads (before segmentation)
   updateProgress(1);
   console.log(`[ReportPipeline] Step 1: ${PIPELINE_STEPS[0]}`);
-  const rawResult = await parseConversations(params);
+  const rawResult = await collectRawMessages(params);
   console.log(
-    `[ReportPipeline] Collected ${rawResult.totalMessages} messages from ${rawResult.threadCount} threads`
+    `[ReportPipeline] Collected ${rawResult.messages.length} messages from ${rawResult.threadCount} threads`
   );
 
-  if (rawResult.segments.length === 0) {
+  if (rawResult.messages.length === 0) {
     return createEmptyReport(title, rawResult.threadCount);
   }
 
   // Step 2: Embed raw messages for topic-based segmentation
   updateProgress(2);
   console.log(`[ReportPipeline] Step 2: ${PIPELINE_STEPS[1]}`);
-  const allRawMessages: ParsedMessage[] = rawResult.segments.flatMap((seg) =>
-    seg.messages.map((m) => ({ id: m.id, threadId: seg.threadId, content: m.content, timestamp: m.timestamp }))
-  );
+  const allRawMessages: ParsedMessage[] = rawResult.messages.map((m) => ({
+    id: m.id, threadId: "", content: m.content, timestamp: m.timestamp,
+  }));
   const rawEmbedResult = await embedMessages(allRawMessages, embedder);
   const embeddingMap = new Map(rawEmbedResult.messages.map((m) => [m.id, m.embedding]));
   console.log(
     `[ReportPipeline] Embedded ${rawEmbedResult.messages.length} messages (${rawEmbedResult.cacheHits} cached)`
   );
 
-  // Step 3: Re-segment with topic awareness (cosine similarity)
+  // Step 3: Segment with topic awareness (single pass with embeddings)
   updateProgress(3);
   console.log(`[ReportPipeline] Step 3: ${PIPELINE_STEPS[2]}`);
   const conversationResult = await parseConversations(params, embeddingMap);
