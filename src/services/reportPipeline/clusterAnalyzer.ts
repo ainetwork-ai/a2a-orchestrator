@@ -77,20 +77,24 @@ async function analyzeCluster(
 ): Promise<PipelineTopic> {
   const clusterId = cluster.id || uuidv4();
 
-  // Build claims context with quotes for rich summary generation
-  const claimsContext = cluster.claims && cluster.claims.length > 0
-    ? cluster.claims
-        .map((claim) => {
+  // Build subtopic-grouped claims context
+  const hasSubtopics = cluster.subtopics.length > 0 &&
+    cluster.subtopics.some((s) => s.claims.length > 0);
+
+  const subtopicSections = hasSubtopics
+    ? cluster.subtopics.map((subtopic, i) => {
+        const claimLines = subtopic.claims.map((claim) => {
           const quoteText = claim.quotes.length > 0
-            ? `\n  Quote: "${truncate(claim.quotes[0].text, ANALYZER_CONFIG.maxContentLength)}"`
+            ? `\n    Quote: "${truncate(claim.quotes[0].text, ANALYZER_CONFIG.maxContentLength)}"`
             : "";
-          return `- Claim: "${truncate(claim.title, ANALYZER_CONFIG.maxContentLength)}" (${claim.stance}, confidence: ${claim.confidence})${quoteText}`;
-        })
-        .join("\n")
+          return `  - Claim: "${truncate(claim.title, ANALYZER_CONFIG.maxContentLength)}" (${claim.stance}, confidence: ${claim.confidence})${quoteText}`;
+        }).join("\n");
+        return `### Group ${i + 1} (${subtopic.claims.length} claims):\n${claimLines}`;
+      }).join("\n\n")
     : null;
 
-  // Build inside examples as fallback (when no claims available)
-  const insideExamples = !claimsContext
+  // Fallback: raw messages
+  const insideExamples = !subtopicSections
     ? cluster.messages
         .slice(0, ANALYZER_CONFIG.maxInsideExamples)
         .map((m) => `- "${truncate(m.content, ANALYZER_CONFIG.maxContentLength)}"`)
@@ -106,15 +110,22 @@ async function analyzeCluster(
     .map((m) => `- "${truncate(m.content, ANALYZER_CONFIG.maxContentLength / 1.5)}"`)
     .join("\n");
 
-  // Build prompt
   const langInstruction =
     language === "ko"
       ? "CRITICAL: You MUST write ALL text content in Korean (한국어). Even if the input messages are in English, your output MUST be in Korean. Do NOT write any text in English."
       : "Write all text content in English.";
 
-  const insideSection = claimsContext
-    ? `## Claims extracted from conversations (with quotes):\n${claimsContext}`
+  const insideSection = subtopicSections
+    ? `## Claims grouped by subtopic:\n${subtopicSections}`
     : `## Examples INSIDE this cluster:\n${insideExamples}`;
+
+  const subtopicInstruction = hasSubtopics
+    ? `5. **Subtopic Labels**: For each of the ${cluster.subtopics.length} groups above, provide a short name (2-6 words) and one-sentence description`
+    : "";
+
+  const subtopicJson = hasSubtopics
+    ? `,\n  "subtopics": [\n    { "name": "서브토픽 라벨", "description": "설명" }\n  ]`
+    : "";
 
   const prompt = `You are analyzing a cluster of user feedback messages.
 
@@ -139,6 +150,7 @@ Based on the contrast between messages inside and outside the cluster, provide:
    - Captures the breadth of discussion on this topic
    - Is comprehensive yet concise
 4. **Sentiment**: Overall sentiment ("positive", "negative", "mixed", "neutral")
+${subtopicInstruction}
 
 Respond in JSON format only:
 {
@@ -147,7 +159,7 @@ Respond in JSON format only:
   "summary": {
     "text": "100-140 단어의 자연어 요약 문단",
     "sentiment": "mixed"
-  }
+  }${subtopicJson}
 }`;
 
   try {
@@ -164,6 +176,7 @@ Respond in JSON format only:
       topic?: string;
       description?: string;
       summary?: { text?: string; sentiment?: string };
+      subtopics?: Array<{ name?: string; description?: string }>;
     }>(response);
 
     const summary: ClusterSummary = {
@@ -171,11 +184,28 @@ Respond in JSON format only:
       sentiment: (parsed.summary?.sentiment as ClusterSummary["sentiment"]) || "neutral",
     };
 
+    if (parsed.subtopics && parsed.subtopics.length !== cluster.subtopics.length) {
+      console.warn(
+        `[ClusterAnalyzer] Subtopic count mismatch for ${cluster.id}: ` +
+        `expected ${cluster.subtopics.length}, got ${parsed.subtopics.length}`
+      );
+    }
+
+    const updatedSubtopics = cluster.subtopics.map((subtopic, i) => {
+      const llmSubtopic = parsed.subtopics?.[i];
+      return {
+        ...subtopic,
+        title: llmSubtopic?.name || subtopic.title,
+        description: llmSubtopic?.description || subtopic.description,
+      };
+    });
+
     return {
       ...cluster,
       id: clusterId,
       title: parsed.topic || cluster.title,
       description: parsed.description || cluster.description,
+      subtopics: updatedSubtopics,
       summary,
     };
   } catch (error) {

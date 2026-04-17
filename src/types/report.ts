@@ -58,13 +58,23 @@ export interface ClusterSummary {
 }
 
 /**
+ * Subtopic within a topic (T3C: Subtopic)
+ */
+export interface Subtopic {
+  id: string;
+  title: string;
+  description: string;
+  claims: Claim[];
+}
+
+/**
  * Topic cluster (T3C: Topic)
  */
 export interface Topic {
   id: string;
   title: string;             // topic label
   description: string;
-  claims: Claim[];
+  subtopics: Subtopic[];
   summary: ClusterSummary;
 }
 

@@ -13,11 +13,11 @@
 import { collectRawMessages } from "./conversationParser";
 import { extractOpinionsByThread } from "./opinionExtractor";
 import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
-import { clusterByEmbedding } from "./clusterer";
+import { clusterByEmbedding, subClusterTopic } from "./clusterer";
 import { analyzeClusters } from "./clusterAnalyzer";
 import { analyzeData } from "./analyzer";
 import { synthesizeReport } from "./synthesizer";
-import { opinionsToParsedMessages } from "./pipelineUtils";
+import { opinionsToParsedMessages, cosineSimilarity } from "./pipelineUtils";
 import {
   Report,
   ReportRequestParams,
@@ -248,6 +248,28 @@ async function runSharedPipeline(opts: {
       });
   }
 
+  // Sub-cluster claims within each topic into subtopics
+  const embeddingMap = new Map(substantiveMessages.map((m) => [m.id, m.embedding]));
+  for (const cluster of clustererResult.clusters) {
+    cluster.subtopics = subClusterTopic(cluster.claims, embeddingMap, cluster.id);
+    cluster.claims = []; // moved into subtopics
+  }
+
+  const totalSubtopics = clustererResult.clusters.reduce((sum, c) => sum + c.subtopics.length, 0);
+  console.log(`[ReportPipeline] Sub-clustered into ${totalSubtopics} subtopics`);
+
+  // Dedup similar claims within each subtopic (cosine similarity on embeddings)
+  let totalBeforeDedup = 0;
+  let totalAfterDedup = 0;
+  for (const cluster of clustererResult.clusters) {
+    for (const subtopic of cluster.subtopics) {
+      totalBeforeDedup += subtopic.claims.length;
+      subtopic.claims = deduplicateClaims(subtopic.claims, embeddingMap);
+      totalAfterDedup += subtopic.claims.length;
+    }
+  }
+  console.log(`[ReportPipeline] Dedup: ${totalBeforeDedup} → ${totalAfterDedup} primary claims`);
+
   // Analyze clusters (LLM: topic labels, descriptions, summaries — uses claims)
   step++;
   updateProgress(step);
@@ -281,8 +303,8 @@ async function runSharedPipeline(opts: {
     segmentCount: 1,
   }));
 
-  // Build final report — strip internal messages from topics
-  const topics = analyzedClusters.map(({ messages, ...topic }) => topic);
+  // Build final report — strip pipeline-internal fields (messages, claims) from topics
+  const topics = analyzedClusters.map(({ messages, claims, ...topic }) => topic);
 
   const report: Report = {
     title,
@@ -320,6 +342,63 @@ async function runSharedPipeline(opts: {
 }
 
 const CONTEXT_WINDOW_RADIUS = 3;
+
+const DEDUP_SIMILARITY_THRESHOLD = 0.85;
+
+/**
+ * Deduplicate claims within a subtopic using cosine similarity on embeddings.
+ * Uses seed-based greedy grouping: each ungrouped claim becomes a seed,
+ * and remaining claims similar to the seed join its group.
+ * The primary claim (highest confidence) represents each group.
+ */
+function deduplicateClaims(
+  claims: Claim[],
+  embeddingMap: Map<string, number[]>
+): Claim[] {
+  if (claims.length <= 1) return claims;
+
+  // Build pairs with embeddings
+  const claimsWithEmb = claims
+    .map((c) => ({ claim: c, embedding: embeddingMap.get(c.id) }))
+    .filter((c): c is { claim: Claim; embedding: number[] } => !!c.embedding);
+
+  // Claims without embeddings pass through as-is
+  const noEmbClaims = claims.filter((c) => !embeddingMap.has(c.id));
+
+  const grouped = new Set<string>();
+  const groups: Claim[][] = [];
+
+  for (let i = 0; i < claimsWithEmb.length; i++) {
+    if (grouped.has(claimsWithEmb[i].claim.id)) continue;
+
+    const group: Claim[] = [claimsWithEmb[i].claim];
+    grouped.add(claimsWithEmb[i].claim.id);
+
+    for (let j = i + 1; j < claimsWithEmb.length; j++) {
+      if (grouped.has(claimsWithEmb[j].claim.id)) continue;
+
+      const sim = cosineSimilarity(claimsWithEmb[i].embedding, claimsWithEmb[j].embedding);
+      if (sim >= DEDUP_SIMILARITY_THRESHOLD) {
+        group.push(claimsWithEmb[j].claim);
+        grouped.add(claimsWithEmb[j].claim.id);
+      }
+    }
+    groups.push(group);
+  }
+
+  // For each group: pick highest confidence as primary, rest go to similarClaims
+  const primaryClaims: Claim[] = groups.map((group) => {
+    group.sort((a, b) => b.confidence - a.confidence);
+    const [primary, ...duplicates] = group;
+    return {
+      ...primary,
+      similarClaims: duplicates,
+      number: 1 + duplicates.length,
+    };
+  });
+
+  return [...primaryClaims, ...noEmbClaims];
+}
 
 /**
  * Build a context window of messages around the given key message IDs.

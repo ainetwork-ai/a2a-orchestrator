@@ -31,7 +31,7 @@ export async function synthesizeReport(
 
   const topicSummaries = clusters.map(cluster => ({
     topic: cluster.title,
-    claimCount: cluster.claims.length,
+    claimCount: cluster.subtopics.reduce((sum, s) => sum + s.claims.length, 0),
     summary: cluster.summary.text,
   }));
 

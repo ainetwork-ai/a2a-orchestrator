@@ -19,26 +19,12 @@ import {
   SegmentMessage,
   ReportRequestParams,
 } from "../../types/report";
-import { filterThreads, resolveDateRange, anonymizeContent } from "./pipelineUtils";
+import { filterThreads, resolveDateRange, anonymizeContent, cosineSimilarity } from "./pipelineUtils";
 
 // Segment splitting constants
 export const SEGMENT_TIME_GAP_MS = 5 * 60 * 1000; // 5 minutes
 export const MAX_SEGMENT_MESSAGES = 20;
 export const TOPIC_SHIFT_THRESHOLD = 0.4; // cosine similarity below this = topic change (0.65 was too aggressive)
-
-/**
- * Cosine similarity between two vectors
- */
-function cosineSimilarity(a: number[], b: number[]): number {
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
-}
 
 /**
  * Collect raw messages from threads grouped by thread ID.
