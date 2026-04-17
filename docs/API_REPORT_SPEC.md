@@ -184,11 +184,21 @@ Invalidate report cache.
   id: string;
   title: string;                   // topic label (3-5 words)
   description: string;
-  claims: Claim[];
+  subtopics: Subtopic[];           // claims grouped by subtopic
   summary: {
     text: string;                  // 100-140 word natural language summary
     sentiment: "positive" | "negative" | "mixed" | "neutral";
   };
+}
+```
+
+### Subtopic
+```typescript
+{
+  id: string;
+  title: string;                   // subtopic label (2-6 words)
+  description: string;
+  claims: Claim[];
 }
 ```
 
@@ -200,8 +210,8 @@ Invalidate report cache.
   title: string;                   // self-contained opinion statement
   quotes: Quote[];                 // original messages backing this claim
   context: SegmentMessage[];       // full conversation segment (once per claim)
-  number: number;                  // = quotes.length
-  similarClaims: Claim[];          // [] (T3C compatibility, reserved)
+  number: number;                  // 1 + similarClaims.length (total mention count)
+  similarClaims: Claim[];          // deduplicated similar claims (cosine similarity >= 0.85)
   // AINSPACE extensions:
   stance: "support" | "oppose" | "neutral" | "request" | "question";
   confidence: number;              // 0.0~1.0
