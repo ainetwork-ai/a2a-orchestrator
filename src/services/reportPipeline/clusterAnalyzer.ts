@@ -16,7 +16,6 @@ import {
   ParsedMessage,
   ClusterSummary,
   ReportLanguage,
-  ExtractedOpinion,
 } from "../../types/report";
 import { PipelineTopic } from "./clusterer";
 import { parseJsonResponse } from "../../utils/llm";
@@ -45,8 +44,7 @@ export async function analyzeClusters(
   clusters: PipelineTopic[],
   apiUrl: string,
   model: string,
-  language: ReportLanguage = "ko",
-  extractedOpinions?: ExtractedOpinion[]
+  language: ReportLanguage = "ko"
 ): Promise<PipelineTopic[]> {
   console.log(`[ClusterAnalyzer] Analyzing ${clusters.length} clusters`);
 
@@ -55,13 +53,10 @@ export async function analyzeClusters(
   }
 
   const allMessages = clusters.flatMap((c) => c.messages);
-  const opinionMap = extractedOpinions
-    ? new Map(extractedOpinions.map((op) => [op.id, op]))
-    : undefined;
 
   const analyzedClusters = await Promise.all(
     clusters.map((cluster) =>
-      analyzeCluster(cluster, allMessages, apiUrl, model, language, opinionMap)
+      analyzeCluster(cluster, allMessages, apiUrl, model, language)
     )
   );
 
@@ -78,24 +73,24 @@ async function analyzeCluster(
   allMessages: ParsedMessage[],
   apiUrl: string,
   model: string,
-  language: ReportLanguage,
-  opinionMap?: Map<string, ExtractedOpinion>
+  language: ReportLanguage
 ): Promise<PipelineTopic> {
   const clusterId = cluster.id || uuidv4();
 
-  // Build opinion context with stance/confidence metadata
-  const opinionContext = opinionMap
-    ? cluster.messages
-        .filter((m) => opinionMap.has(m.id))
-        .map((m) => {
-          const op = opinionMap.get(m.id)!;
-          return `- "${truncate(op.statement, ANALYZER_CONFIG.maxContentLength)}" (${op.stance}, confidence: ${op.confidence})`;
+  // Build claims context with quotes for rich summary generation
+  const claimsContext = cluster.claims && cluster.claims.length > 0
+    ? cluster.claims
+        .map((claim) => {
+          const quoteText = claim.quotes.length > 0
+            ? `\n  Quote: "${truncate(claim.quotes[0].text, ANALYZER_CONFIG.maxContentLength)}"`
+            : "";
+          return `- Claim: "${truncate(claim.title, ANALYZER_CONFIG.maxContentLength)}" (${claim.stance}, confidence: ${claim.confidence})${quoteText}`;
         })
         .join("\n")
     : null;
 
-  // Build inside examples as fallback (when no opinion metadata)
-  const insideExamples = !opinionContext
+  // Build inside examples as fallback (when no claims available)
+  const insideExamples = !claimsContext
     ? cluster.messages
         .slice(0, ANALYZER_CONFIG.maxInsideExamples)
         .map((m) => `- "${truncate(m.content, ANALYZER_CONFIG.maxContentLength)}"`)
@@ -117,8 +112,8 @@ async function analyzeCluster(
       ? "CRITICAL: You MUST write ALL text content in Korean (한국어). Even if the input messages are in English, your output MUST be in Korean. Do NOT write any text in English."
       : "Write all text content in English.";
 
-  const insideSection = opinionContext
-    ? `## Opinions extracted from conversations (with stance and confidence):\n${opinionContext}`
+  const insideSection = claimsContext
+    ? `## Claims extracted from conversations (with quotes):\n${claimsContext}`
     : `## Examples INSIDE this cluster:\n${insideExamples}`;
 
   const prompt = `You are analyzing a cluster of user feedback messages.
@@ -138,18 +133,19 @@ Based on the contrast between messages inside and outside the cluster, provide:
 
 1. **Topic Label**: A short, descriptive topic name (3-5 words)
 2. **Description**: One sentence describing what this cluster is about
-3. **Summary**:
-   - consensus: Common opinions shared by most users
-   - conflicting: Conflicting opinions (if any)
-   - sentiment: Overall sentiment ("positive", "negative", "mixed", "neutral")
+3. **Summary**: Generate a detailed summary (100-140 words) that:
+   - Synthesizes the key themes and patterns across all claims
+   - Highlights the main perspectives and stances expressed
+   - Captures the breadth of discussion on this topic
+   - Is comprehensive yet concise
+4. **Sentiment**: Overall sentiment ("positive", "negative", "mixed", "neutral")
 
 Respond in JSON format only:
 {
   "topic": "토픽 라벨",
   "description": "이 클러스터에 대한 설명",
   "summary": {
-    "consensus": ["Common opinion 1", "Common opinion 2"],
-    "conflicting": ["Some users want X while others prefer Y"],
+    "text": "100-140 단어의 자연어 요약 문단",
     "sentiment": "mixed"
   }
 }`;
@@ -167,12 +163,11 @@ Respond in JSON format only:
     const parsed = parseJsonResponse<{
       topic?: string;
       description?: string;
-      summary?: { consensus?: string[]; conflicting?: string[]; sentiment?: string };
+      summary?: { text?: string; sentiment?: string };
     }>(response);
 
     const summary: ClusterSummary = {
-      consensus: parsed.summary?.consensus || [],
-      conflicting: parsed.summary?.conflicting || [],
+      text: parsed.summary?.text || "",
       sentiment: (parsed.summary?.sentiment as ClusterSummary["sentiment"]) || "neutral",
     };
 
@@ -181,20 +176,16 @@ Respond in JSON format only:
       id: clusterId,
       title: parsed.topic || cluster.title,
       description: parsed.description || cluster.description,
-      claims: [],
       summary,
     };
   } catch (error) {
     console.error(`[ClusterAnalyzer] Error analyzing cluster ${cluster.id}:`, error);
 
-    // Return cluster with minimal analysis on error
     return {
       ...cluster,
       id: clusterId,
-      claims: [],
       summary: {
-        consensus: [],
-        conflicting: [],
+        text: "",
         sentiment: cluster.summary?.sentiment || "neutral",
       },
     };

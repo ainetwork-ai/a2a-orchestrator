@@ -10,8 +10,8 @@
  * 7. Synthesize insights (LLM)
  */
 
-import { parseConversations, collectRawMessages } from "./conversationParser";
-import { extractOpinions } from "./opinionExtractor";
+import { collectRawMessages } from "./conversationParser";
+import { extractOpinionsByThread } from "./opinionExtractor";
 import { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder, AzureOpenAIConfig } from "./embedder";
 import { clusterByEmbedding } from "./clusterer";
 import { analyzeClusters } from "./clusterAnalyzer";
@@ -23,11 +23,10 @@ import {
   ReportRequestParams,
   ReportJobProgress,
   ReportLanguage,
-  ParsedMessage,
   Source,
   Claim,
   Quote,
-  type ConversationSegment,
+  SegmentMessage,
   type ExtractedOpinion,
 } from "../../types/report";
 import { EmbedFunction, EmbeddedMessage } from "../../types/embedding";
@@ -36,13 +35,11 @@ import { validateReportMessages, validateStatistics } from "../../utils/reportVa
 export type ProgressCallback = (progress: ReportJobProgress) => void;
 
 /**
- * Pipeline steps
+ * Pipeline steps (EPIC5.1: thread-level extraction, no segmentation)
  */
 const PIPELINE_STEPS = [
   "Collecting messages",
-  "Embedding messages",
-  "Segmenting by topic",
-  "Extracting claims",
+  "Extracting claims (thread-level)",
   "Embedding claims",
   "Clustering",
   "Analyzing clusters",
@@ -93,6 +90,7 @@ function getEmbedder(): EmbedFunction {
 
 /**
  * Execute the report generation pipeline.
+ * EPIC5.1: Thread-level extraction (no segmentation step)
  */
 export async function generateReport(
   params: ReportRequestParams,
@@ -107,74 +105,50 @@ export async function generateReport(
 
   const embedder = getEmbedder();
 
-  // Step 1: Collect raw messages from threads (before segmentation)
+  // Step 1: Collect raw messages grouped by thread
   updateProgress(1);
   console.log(`[ReportPipeline] Step 1: ${PIPELINE_STEPS[0]}`);
   const rawResult = await collectRawMessages(params);
   console.log(
-    `[ReportPipeline] Collected ${rawResult.messages.length} messages from ${rawResult.threadCount} threads`
+    `[ReportPipeline] Collected ${rawResult.totalMessageCount} messages from ${rawResult.threadCount} threads`
   );
 
-  if (rawResult.messages.length === 0) {
+  if (rawResult.totalMessageCount === 0) {
     return createEmptyReport(title, rawResult.threadCount);
   }
 
-  // Step 2: Embed raw messages for topic-based segmentation
+  // Step 2: Extract claims per thread (1 LLM call per thread, topics identified by LLM)
   updateProgress(2);
   console.log(`[ReportPipeline] Step 2: ${PIPELINE_STEPS[1]}`);
-  const allRawMessages: ParsedMessage[] = rawResult.messages.map((m) => ({
-    id: m.id, threadId: "", content: m.content, timestamp: m.timestamp,
-  }));
-  const rawEmbedResult = await embedMessages(allRawMessages, embedder);
-  const embeddingMap = new Map(rawEmbedResult.messages.map((m) => [m.id, m.embedding]));
-  console.log(
-    `[ReportPipeline] Embedded ${rawEmbedResult.messages.length} messages (${rawEmbedResult.cacheHits} cached)`
-  );
-
-  // Step 3: Segment with topic awareness (single pass with embeddings)
-  updateProgress(3);
-  console.log(`[ReportPipeline] Step 3: ${PIPELINE_STEPS[2]}`);
-  const conversationResult = await parseConversations(params, embeddingMap);
-  console.log(
-    `[ReportPipeline] Segmented into ${conversationResult.segments.length} topic-based segments`
-  );
-
-  if (conversationResult.segments.length === 0) {
-    return createEmptyReport(title, conversationResult.threadCount);
-  }
-
-  // Step 4: Extract 1 claim per segment using LLM
-  updateProgress(4);
-  console.log(`[ReportPipeline] Step 4: ${PIPELINE_STEPS[3]}`);
-  const extractionResult = await extractOpinions(
-    conversationResult.segments, apiUrl, model, language
+  const extractionResult = await extractOpinionsByThread(
+    rawResult.threadMessages, apiUrl, model, language
   );
   console.log(
-    `[ReportPipeline] Extracted ${extractionResult.opinions.length} claims from ${conversationResult.segments.length} segments ` +
+    `[ReportPipeline] Extracted ${extractionResult.opinions.length} claims from ${rawResult.threadCount} threads ` +
     `(${extractionResult.failedSegments} failed, ${extractionResult.evolvedOpinionCount} evolved)`
   );
 
   if (extractionResult.opinions.length === 0) {
-    return createEmptyReport(title, conversationResult.threadCount);
+    return createEmptyReport(title, rawResult.threadCount);
   }
 
-  // Step 5: Embed claims for clustering
-  updateProgress(5);
-  console.log(`[ReportPipeline] Step 5: ${PIPELINE_STEPS[4]}`);
+  // Step 3: Embed claims for clustering
+  updateProgress(3);
+  console.log(`[ReportPipeline] Step 3: ${PIPELINE_STEPS[2]}`);
   const parsedMessages = opinionsToParsedMessages(extractionResult.opinions);
   const embeddingResult = await embedMessages(parsedMessages, embedder);
   console.log(
     `[ReportPipeline] Claim embeddings: ${embeddingResult.cacheHits} cached, ${embeddingResult.newEmbeddings} new`
   );
 
-  // Steps 6-9: shared pipeline
+  // Steps 4-7: shared pipeline (clustering → analysis → statistics → synthesis)
   return runSharedPipeline({
     title, language, params, apiUrl, model,
     substantiveMessages: embeddingResult.messages,
-    threadCount: conversationResult.threadCount,
-    onProgress, stepOffset: 5,
+    threadCount: rawResult.threadCount,
+    onProgress, stepOffset: 3,
     extractedOpinions: extractionResult.opinions,
-    conversationSegments: conversationResult.segments,
+    threadMessages: rawResult.threadMessages,
   });
 }
 
@@ -195,7 +169,7 @@ function makeProgressUpdater(steps: string[], onProgress?: ProgressCallback) {
 }
 
 /**
- * Shared pipeline: clustering through synthesis (Steps 4-9)
+ * Shared pipeline: clustering through synthesis
  */
 async function runSharedPipeline(opts: {
   title: string;
@@ -207,13 +181,13 @@ async function runSharedPipeline(opts: {
   threadCount: number;
   onProgress?: ProgressCallback;
   stepOffset: number;
-  extractedOpinions?: ExtractedOpinion[];
-  conversationSegments?: ConversationSegment[];
+  extractedOpinions: ExtractedOpinion[];
+  threadMessages: Map<string, SegmentMessage[]>;
 }): Promise<Report> {
   const {
     title, language, params, apiUrl, model,
     substantiveMessages, threadCount,
-    stepOffset, extractedOpinions, conversationSegments,
+    stepOffset, extractedOpinions, threadMessages,
   } = opts;
 
   const updateProgress = makeProgressUpdater(PIPELINE_STEPS, opts.onProgress);
@@ -233,65 +207,63 @@ async function runSharedPipeline(opts: {
     console.log(`[ReportPipeline] Cluster breakdown: ${clusterSummary}`);
   }
 
-  // Analyze clusters (LLM: topic labels, descriptions, summaries)
+  // Map ExtractedOpinions → Claims before analysis (so analyzeClusters can use claims)
+  const messageMap = new Map<string, { content: string; threadId: string }>();
+  for (const [threadId, msgs] of threadMessages) {
+    for (const m of msgs) {
+      messageMap.set(m.id, { content: m.content, threadId });
+    }
+  }
+
+  const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
+  for (const cluster of clustererResult.clusters) {
+    cluster.claims = cluster.messages
+      .filter((m) => opinionMap.has(m.id))
+      .map((m) => {
+        const op = opinionMap.get(m.id)!;
+        const validMsgIds = op.source.keyMessageIds.filter((msgId) => messageMap.has(msgId));
+        const quotes: Quote[] = validMsgIds.map((msgId) => ({
+          id: msgId,
+          text: messageMap.get(msgId)!.content,
+          reference: {
+            id: `ref-${msgId}`,
+            sourceId: op.threadId,
+            segmentId: op.source.segmentId,
+            messageId: msgId,
+          },
+        }));
+        const context = buildContextWindow(threadMessages.get(op.threadId) || [], validMsgIds);
+        return {
+          id: op.id,
+          speaker: op.speaker,
+          title: op.statement,
+          quotes,
+          context,
+          number: quotes.length,
+          similarClaims: [],
+          stance: op.stance,
+          confidence: op.confidence,
+          evolved: op.evolved,
+        } satisfies Claim;
+      });
+  }
+
+  // Analyze clusters (LLM: topic labels, descriptions, summaries — uses claims)
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const analyzedClusters = await analyzeClusters(
-    clustererResult.clusters, apiUrl, model, language, extractedOpinions
+    clustererResult.clusters, apiUrl, model, language
   );
   console.log(`[ReportPipeline] Analyzed ${analyzedClusters.length} clusters`);
-
-  // Map ExtractedOpinions → Claims (no LLM — already grounded at extraction)
-  if (extractedOpinions) {
-    // messageId → { content, segment } for quote text + conversation context
-    const messageMap = new Map(
-      (conversationSegments || []).flatMap((seg) =>
-        seg.messages.map((m) => [m.id, { content: m.content, segment: seg }])
-      )
-    );
-    const opinionMap = new Map(extractedOpinions.map((op) => [op.id, op]));
-    for (const cluster of analyzedClusters) {
-      cluster.claims = cluster.messages
-        .filter((m) => opinionMap.has(m.id))
-        .map((m) => {
-          const op = opinionMap.get(m.id)!;
-          const validMsgIds = op.source.keyMessageIds.filter((msgId) => messageMap.has(msgId));
-          const quotes: Quote[] = validMsgIds.map((msgId) => ({
-            id: msgId,
-            text: op.quote || messageMap.get(msgId)!.content,
-            reference: {
-              id: `ref-${msgId}`,
-              sourceId: op.threadId,
-              segmentId: op.source.segmentId,
-              messageId: msgId,
-            },
-          }));
-          // Context: segment messages from first valid keyMessageId (same segment, stored once)
-          const firstMsg = validMsgIds.length > 0 ? messageMap.get(validMsgIds[0]) : undefined;
-          return {
-            id: op.id,
-            speaker: op.speaker,
-            title: op.statement,
-            quotes,
-            context: firstMsg?.segment.messages || [],
-            number: quotes.length,
-            similarClaims: [],
-            stance: op.stance,
-            confidence: op.confidence,
-            evolved: op.evolved,
-          } satisfies Claim;
-        });
-    }
-  }
 
   // Calculate statistics
   step++;
   updateProgress(step);
   console.log(`[ReportPipeline] Step ${step}: ${PIPELINE_STEPS[step - 1]}`);
   const analyzerResult = analyzeData(
-    extractedOpinions || [], analyzedClusters, threadCount,
-    conversationSegments?.length || 0
+    extractedOpinions, analyzedClusters, threadCount,
+    threadMessages.size
   );
 
   // Synthesize insights
@@ -301,18 +273,12 @@ async function runSharedPipeline(opts: {
   const synthesizerResult = await synthesizeReport(
     analyzedClusters, analyzerResult.statistics, apiUrl, model, language
   );
-  console.log(
-    `[ReportPipeline] Synthesized ${synthesizerResult.synthesis.keyFindings.length} key findings`
-  );
+  console.log(`[ReportPipeline] Synthesis completed`);
 
-  // Build sources from conversation segments
-  const sourceMap = new Map<string, number>();
-  for (const seg of conversationSegments || []) {
-    sourceMap.set(seg.threadId, (sourceMap.get(seg.threadId) || 0) + 1);
-  }
-  const sources: Source[] = Array.from(sourceMap.entries()).map(([id, segmentCount]) => ({
+  // Build sources from threads (1 source per thread, segmentCount = 1 in thread-level mode)
+  const sources: Source[] = Array.from(threadMessages.keys()).map((id) => ({
     id,
-    segmentCount,
+    segmentCount: 1,
   }));
 
   // Build final report — strip internal messages from topics
@@ -353,6 +319,35 @@ async function runSharedPipeline(opts: {
   return report;
 }
 
+const CONTEXT_WINDOW_RADIUS = 3;
+
+/**
+ * Build a context window of messages around the given key message IDs.
+ * Returns a deduplicated, time-ordered slice of thread messages within
+ * ±CONTEXT_WINDOW_RADIUS of each key message.
+ */
+function buildContextWindow(
+  threadMsgs: SegmentMessage[],
+  keyMessageIds: string[]
+): SegmentMessage[] {
+  if (keyMessageIds.length === 0 || threadMsgs.length === 0) return [];
+
+  const idToIndex = new Map(threadMsgs.map((m, i) => [m.id, i]));
+  const includeSet = new Set<number>();
+
+  for (const msgId of keyMessageIds) {
+    const idx = idToIndex.get(msgId);
+    if (idx === undefined) continue;
+    const start = Math.max(0, idx - CONTEXT_WINDOW_RADIUS);
+    const end = Math.min(threadMsgs.length - 1, idx + CONTEXT_WINDOW_RADIUS);
+    for (let i = start; i <= end; i++) {
+      includeSet.add(i);
+    }
+  }
+
+  return Array.from(includeSet).sort((a, b) => a - b).map((i) => threadMsgs[i]);
+}
+
 /**
  * Create an empty report when no messages are found
  */
@@ -381,7 +376,7 @@ function createEmptyReport(
 
 // Export pipeline components
 export { parseConversations } from "./conversationParser";
-export { extractOpinions } from "./opinionExtractor";
+export { extractOpinions, extractOpinionsByThread } from "./opinionExtractor";
 export { embedMessages, createOpenAIEmbedder, createAzureOpenAIEmbedder } from "./embedder";
 export { clusterByEmbedding, kMeans } from "./clusterer";
 export { analyzeClusters } from "./clusterAnalyzer";

@@ -186,8 +186,7 @@ Invalidate report cache.
   description: string;
   claims: Claim[];
   summary: {
-    consensus: string[];
-    conflicting: string[];
+    text: string;                  // 100-140 word natural language summary
     sentiment: "positive" | "negative" | "mixed" | "neutral";
   };
 }
@@ -265,8 +264,6 @@ Invalidate report cache.
 ### ReportSynthesis
 ```typescript
 {
-  overallSentiment: "positive" | "negative" | "mixed" | "neutral";
-  keyFindings: string[];
   executiveSummary: string;
 }
 ```
@@ -300,14 +297,12 @@ Invalidate report cache.
 
 ---
 
-## Pipeline Steps (9 total, 3 LLM calls)
+## Pipeline Steps (7 total, 3 LLM calls)
 
-1. Collect messages from threads
-2. Embed raw messages (for topic-based segmentation)
-3. Segment by topic (cosine similarity + physical criteria)
-4. Extract 1 claim per segment (LLM) — 0 if no debatable position
-5. Embed claims (for clustering)
-6. Cluster (UMAP + K-means) → Topic[]
-7. Analyze clusters (LLM) → topic labels, summaries
-8. Calculate statistics → ReportStatistics
-9. Synthesize insights (LLM) → ReportSynthesis
+1. Collect messages from threads (grouped by thread)
+2. Extract claims per thread (LLM) — topic identification + 1 claim per topic
+3. Embed claims (for clustering)
+4. Cluster (UMAP + K-means) + map claims → Topic[]
+5. Analyze clusters (LLM) → topic labels, natural language summaries
+6. Calculate statistics → ReportStatistics
+7. Synthesize executive summary (LLM) → ReportSynthesis
