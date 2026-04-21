@@ -26,13 +26,11 @@ export interface Reference {
 }
 
 /**
- * Quote from a conversation — the original user message backing a claim,
- * with surrounding conversation context (agent questions + user responses)
+ * Quote from a conversation — an individual message backing a claim
  */
 export interface Quote {
   id: string;
   text: string;              // the key message content
-  context: SegmentMessage[]; // full conversation segment (agent + user messages)
   reference: Reference;
 }
 
@@ -42,8 +40,10 @@ export interface Quote {
  */
 export interface Claim {
   id: string;
+  speaker: string;           // "User" or agent name
   title: string;             // self-contained opinion statement
   quotes: Quote[];           // original messages backing this claim
+  context: SegmentMessage[]; // full conversation segment (once per claim, not per quote)
   number: number;            // mention count (= quotes.length)
   similarClaims: Claim[];    // empty for now, T3C compatibility
   // AINSPACE extensions
@@ -53,9 +53,18 @@ export interface Claim {
 }
 
 export interface ClusterSummary {
-  consensus: string[];
-  conflicting: string[];
+  text: string;
   sentiment: "positive" | "negative" | "mixed" | "neutral";
+}
+
+/**
+ * Subtopic within a topic (T3C: Subtopic)
+ */
+export interface Subtopic {
+  id: string;
+  title: string;
+  description: string;
+  claims: Claim[];
 }
 
 /**
@@ -65,7 +74,7 @@ export interface Topic {
   id: string;
   title: string;             // topic label
   description: string;
-  claims: Claim[];
+  subtopics: Subtopic[];
   summary: ClusterSummary;
 }
 
@@ -79,12 +88,14 @@ export interface Source {
 
 export interface ReportStatistics {
   totalOpinions: number;
+  totalSegments: number;
   totalThreads: number;
   dateRange: {
     start: number;
     end: number;
   };
   stanceDistribution: Record<string, number>;
+  speakerDistribution: Record<string, number>;
   topTopics: Array<{
     topic: string;
     count: number;
@@ -97,8 +108,6 @@ export interface ReportStatistics {
 }
 
 export interface ReportSynthesis {
-  overallSentiment: "positive" | "negative" | "mixed" | "neutral";
-  keyFindings: string[];
   executiveSummary: string;
 }
 
@@ -265,10 +274,12 @@ export interface OpinionSource {
 
 export interface ExtractedOpinion {
   id: string;
+  speaker: string;           // "User" or agent name
   statement: string;
   stance: "support" | "oppose" | "neutral" | "request" | "question";
   confidence: number;
   evolved: boolean;
+  quote?: string;            // LLM-extracted concise quote from conversation
   source: OpinionSource;
   timestamp: number;
   threadId: string;

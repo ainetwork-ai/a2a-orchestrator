@@ -6,17 +6,19 @@
  */
 
 import { UMAP } from "umap-js";
-import { Topic, ParsedMessage } from "../../types/report";
+import { Topic, Subtopic, Claim, ParsedMessage } from "../../types/report";
 import {
   EmbeddedMessage,
   ClustererVisualization,
 } from "../../types/embedding";
 
 /**
- * Internal Topic with messages — used during pipeline, stripped in final Report
+ * Internal Topic with messages — used during pipeline, stripped in final Report.
+ * `claims` is a temporary flat array used before sub-clustering moves them into `subtopics[]`.
  */
 export interface PipelineTopic extends Topic {
   messages: ParsedMessage[];
+  claims: Claim[];
 }
 
 export interface ClustererResult {
@@ -111,9 +113,9 @@ export async function clusterByEmbedding(
       description: "",
       messages: msgs,
       claims: [],
+      subtopics: [],
       summary: {
-        consensus: [],
-        conflicting: [],
+        text: "",
         sentiment: "neutral" as const,
       },
     }));
@@ -225,9 +227,9 @@ function createSingleCluster(
     description: "",
     messages,
     claims: [],
+    subtopics: [],
     summary: {
-      consensus: [],
-      conflicting: [],
+      text: "",
       sentiment: "neutral",
     },
   };
@@ -242,4 +244,84 @@ function createSingleCluster(
   };
 
   return { clusters: [cluster], visualization };
+}
+
+const SUB_CLUSTER_CONFIG = {
+  minClaimsForSubClustering: 6,
+  maxSubtopics: 5,
+  claimsPerSubtopic: 10,
+} as const;
+
+/**
+ * Sub-cluster claims within a topic into subtopics using K-means on embeddings.
+ * Returns Subtopic[] with claims distributed by embedding similarity.
+ */
+export function subClusterTopic(
+  claims: Claim[],
+  embeddingMap: Map<string, number[]>,
+  clusterId: string
+): Subtopic[] {
+  const asSingleSubtopic = (): Subtopic[] => [{
+    id: `${clusterId}-sub-0`,
+    title: "Subtopic 1",
+    description: "",
+    claims,
+  }];
+
+  if (claims.length <= SUB_CLUSTER_CONFIG.minClaimsForSubClustering) {
+    return asSingleSubtopic();
+  }
+
+  // Extract embeddings for claims (matched by id)
+  const claimsWithEmbeddings: { claim: Claim; embedding: number[] }[] = [];
+  for (const claim of claims) {
+    const embedding = embeddingMap.get(claim.id);
+    if (embedding) {
+      claimsWithEmbeddings.push({ claim, embedding });
+    }
+  }
+
+  if (claimsWithEmbeddings.length <= SUB_CLUSTER_CONFIG.minClaimsForSubClustering) {
+    return asSingleSubtopic();
+  }
+
+  const k = Math.min(
+    Math.ceil(claimsWithEmbeddings.length / SUB_CLUSTER_CONFIG.claimsPerSubtopic),
+    SUB_CLUSTER_CONFIG.maxSubtopics
+  );
+
+  if (k <= 1) {
+    return asSingleSubtopic();
+  }
+
+  // Run K-means on raw embeddings (no UMAP needed within a topic)
+  const embeddings = claimsWithEmbeddings.map((c) => c.embedding);
+  const assignments = kMeans(embeddings, k);
+
+  // Group claims by sub-cluster
+  const subClusterMap = new Map<number, Claim[]>();
+  for (let i = 0; i < assignments.length; i++) {
+    const subId = assignments[i];
+    if (!subClusterMap.has(subId)) {
+      subClusterMap.set(subId, []);
+    }
+    subClusterMap.get(subId)!.push(claimsWithEmbeddings[i].claim);
+  }
+
+  // Add any claims that didn't have embeddings to the first subtopic
+  const claimsWithEmbeddingIds = new Set(claimsWithEmbeddings.map((c) => c.claim.id));
+  const orphanClaims = claims.filter((c) => !claimsWithEmbeddingIds.has(c.id));
+  if (orphanClaims.length > 0) {
+    const firstKey = subClusterMap.keys().next().value!;
+    subClusterMap.get(firstKey)!.push(...orphanClaims);
+  }
+
+  return Array.from(subClusterMap.entries())
+    .filter(([_, subClaims]) => subClaims.length > 0)
+    .map(([subId, subClaims]) => ({
+      id: `${clusterId}-sub-${subId}`,
+      title: `Subtopic ${subId + 1}`,
+      description: "",
+      claims: subClaims,
+    }));
 }

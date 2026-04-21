@@ -13,13 +13,20 @@ export function validateReportMessages(report: Report): ValidationResult {
   const warnings: string[] = [];
 
   for (const topic of report.topics) {
-    if (topic.claims.length === 0) {
+    const allClaims = topic.subtopics.flatMap((s) => s.claims);
+    if (allClaims.length === 0) {
       warnings.push(
         `Topic "${topic.title}" has no claims`
       );
     }
 
-    for (const claim of topic.claims) {
+    for (const claim of allClaims) {
+      if (!claim.speaker || claim.speaker.trim() === "") {
+        warnings.push(
+          `Claim "${claim.id}" in topic "${topic.title}" has empty speaker`
+        );
+      }
+
       if (!claim.title || claim.title.trim() === "") {
         errors.push(
           `Claim "${claim.id}" in topic "${topic.title}" has empty title`
@@ -80,6 +87,17 @@ export function validateStatistics(statistics: ReportStatistics): ValidationResu
   if (stanceTotal !== statistics.totalOpinions && statistics.totalOpinions > 0) {
     warnings.push(
       `Stance distribution total (${stanceTotal}) doesn't match total opinions (${statistics.totalOpinions})`
+    );
+  }
+
+  // Check speaker distribution totals
+  const speakerTotal = Object.values(statistics.speakerDistribution).reduce(
+    (sum: number, count: number) => sum + count,
+    0
+  );
+  if (speakerTotal !== statistics.totalOpinions && statistics.totalOpinions > 0) {
+    warnings.push(
+      `Speaker distribution total (${speakerTotal}) doesn't match total opinions (${statistics.totalOpinions})`
     );
   }
 

@@ -19,17 +19,65 @@ import {
   SegmentMessage,
   ReportRequestParams,
 } from "../../types/report";
-import { filterThreads, resolveDateRange, anonymizeContent } from "./pipelineUtils";
+import { filterThreads, resolveDateRange, anonymizeContent, cosineSimilarity } from "./pipelineUtils";
 
 // Segment splitting constants
 export const SEGMENT_TIME_GAP_MS = 5 * 60 * 1000; // 5 minutes
 export const MAX_SEGMENT_MESSAGES = 20;
+export const TOPIC_SHIFT_THRESHOLD = 0.4; // cosine similarity below this = topic change (0.65 was too aggressive)
+
+/**
+ * Collect raw messages from threads grouped by thread ID.
+ */
+export async function collectRawMessages(
+  params: ReportRequestParams
+): Promise<{
+  threadCount: number;
+  totalMessageCount: number;
+  threadMessages: Map<string, SegmentMessage[]>;
+}> {
+  const threads = filterThreads(params, "ConversationParser");
+  const { startDate, endDate } = resolveDateRange(params);
+
+  const threadMessages = new Map<string, SegmentMessage[]>();
+  let totalMessageCount = 0;
+  const threadManager = ThreadManager.getInstance();
+
+  for (const thread of threads) {
+    const world = threadManager.getWorld(thread.id);
+    if (!world) continue;
+
+    const history = world.getHistory();
+    const dateFiltered = history.filter(
+      (m) => m.timestamp >= startDate && m.timestamp <= endDate
+    );
+
+    if (dateFiltered.length === 0) continue;
+
+    const threadMsgs: SegmentMessage[] = [];
+    for (const msg of dateFiltered) {
+      const isUser = msg.speaker === "User";
+      threadMsgs.push({
+        id: msg.id,
+        speaker: msg.speaker,
+        content: isUser ? anonymizeContent(msg.content.trim()) : msg.content.trim(),
+        timestamp: msg.timestamp,
+        isUser,
+      });
+    }
+    threadMessages.set(thread.id, threadMsgs);
+    totalMessageCount += threadMsgs.length;
+  }
+
+  return { threadCount: threadMessages.size, totalMessageCount, threadMessages };
+}
 
 /**
  * Parse threads into conversation segments (user + agent messages preserved)
  */
 export async function parseConversations(
-  params: ReportRequestParams
+  params: ReportRequestParams,
+  embeddings?: Map<string, number[]>
 ): Promise<ConversationParserResult> {
   console.log("[ConversationParser] Starting with params:", JSON.stringify(params));
 
@@ -59,7 +107,7 @@ export async function parseConversations(
 
     dateFiltered.sort((a, b) => a.timestamp - b.timestamp);
 
-    let segments = splitIntoSegments(dateFiltered, thread.id);
+    let segments = splitIntoSegments(dateFiltered, thread.id, embeddings);
 
     // Filter segments to only those where the requested agent(s) participated
     segments = filterSegmentsByAgent(segments, params);
@@ -87,13 +135,13 @@ export async function parseConversations(
  */
 function splitIntoSegments(
   messages: Message[],
-  threadId: string
+  threadId: string,
+  embeddings?: Map<string, number[]>
 ): ConversationSegment[] {
   if (messages.length === 0) return [];
 
   const segments: ConversationSegment[] = [];
   let currentMessages: SegmentMessage[] = [];
-  let hasUserMessage = false;
   let lastTimestamp = messages[0].timestamp;
   // Tracks the last agent speaker to detect agent changes within a segment.
   // Retains its value across user messages intentionally — a user speaking
@@ -103,18 +151,15 @@ function splitIntoSegments(
   const flushSegment = () => {
     if (currentMessages.length === 0) return;
 
-    if (hasUserMessage) {
-      segments.push({
-        id: uuidv4(),
-        threadId,
-        messages: currentMessages,
-        startTimestamp: currentMessages[0].timestamp,
-        endTimestamp: currentMessages[currentMessages.length - 1].timestamp,
-      });
-    }
+    segments.push({
+      id: uuidv4(),
+      threadId,
+      messages: currentMessages,
+      startTimestamp: currentMessages[0].timestamp,
+      endTimestamp: currentMessages[currentMessages.length - 1].timestamp,
+    });
 
     currentMessages = [];
-    hasUserMessage = false;
   };
 
   for (const msg of messages) {
@@ -128,7 +173,18 @@ function splitIntoSegments(
       currentNonUserSpeaker !== lastNonUserSpeaker;
     const maxReached = currentMessages.length >= MAX_SEGMENT_MESSAGES;
 
-    if (currentMessages.length > 0 && (timeGap || agentChanged || maxReached)) {
+    // Topic shift detection via embedding cosine similarity
+    let topicShift = false;
+    if (embeddings && currentMessages.length > 0) {
+      const lastMsg = currentMessages[currentMessages.length - 1];
+      const lastEmb = embeddings.get(lastMsg.id);
+      const currEmb = embeddings.get(msg.id);
+      if (lastEmb && currEmb) {
+        topicShift = cosineSimilarity(lastEmb, currEmb) < TOPIC_SHIFT_THRESHOLD;
+      }
+    }
+
+    if (currentMessages.length > 0 && (timeGap || agentChanged || maxReached || topicShift)) {
       flushSegment();
     }
 
@@ -142,7 +198,6 @@ function splitIntoSegments(
       isUser,
     });
 
-    if (isUser) hasUserMessage = true;
     lastTimestamp = msg.timestamp;
     if (currentNonUserSpeaker !== null) {
       lastNonUserSpeaker = currentNonUserSpeaker;

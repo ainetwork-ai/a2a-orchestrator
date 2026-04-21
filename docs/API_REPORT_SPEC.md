@@ -184,12 +184,21 @@ Invalidate report cache.
   id: string;
   title: string;                   // topic label (3-5 words)
   description: string;
-  claims: Claim[];
+  subtopics: Subtopic[];           // claims grouped by subtopic
   summary: {
-    consensus: string[];
-    conflicting: string[];
+    text: string;                  // 100-140 word natural language summary
     sentiment: "positive" | "negative" | "mixed" | "neutral";
   };
+}
+```
+
+### Subtopic
+```typescript
+{
+  id: string;
+  title: string;                   // subtopic label (2-6 words)
+  description: string;
+  claims: Claim[];
 }
 ```
 
@@ -197,10 +206,12 @@ Invalidate report cache.
 ```typescript
 {
   id: string;
+  speaker: string;                 // "User" or agent name
   title: string;                   // self-contained opinion statement
   quotes: Quote[];                 // original messages backing this claim
-  number: number;                  // = quotes.length
-  similarClaims: Claim[];          // [] (T3C compatibility, reserved)
+  context: SegmentMessage[];       // full conversation segment (once per claim)
+  number: number;                  // 1 + similarClaims.length (total mention count)
+  similarClaims: Claim[];          // deduplicated similar claims (cosine similarity >= 0.85)
   // AINSPACE extensions:
   stance: "support" | "oppose" | "neutral" | "request" | "question";
   confidence: number;              // 0.0~1.0
@@ -213,7 +224,6 @@ Invalidate report cache.
 {
   id: string;
   text: string;                    // the key message content
-  context: SegmentMessage[];       // full conversation segment (agent + user messages)
   reference: Reference;
 }
 ```
@@ -251,9 +261,11 @@ Invalidate report cache.
 ```typescript
 {
   totalOpinions: number;
+  totalSegments: number;             // conversation segments analyzed
   totalThreads: number;
   dateRange: { start: number; end: number };
   stanceDistribution: Record<string, number>;
+  speakerDistribution: Record<string, number>;
   topTopics: Array<{ topic: string; count: number; percentage: number }>;
   deliberation: { totalOpinions: number; evolvedCount: number };
 }
@@ -262,8 +274,6 @@ Invalidate report cache.
 ### ReportSynthesis
 ```typescript
 {
-  overallSentiment: "positive" | "negative" | "mixed" | "neutral";
-  keyFindings: string[];
   executiveSummary: string;
 }
 ```
@@ -299,10 +309,10 @@ Invalidate report cache.
 
 ## Pipeline Steps (7 total, 3 LLM calls)
 
-1. Parse conversations → ConversationSegment[]
-2. Extract opinions (LLM) → ExtractedOpinion[]
-3. Generate embeddings → EmbeddedMessage[]
-4. Cluster (UMAP + K-means) → Topic[]
-5. Analyze clusters (LLM) → topic labels, summaries
+1. Collect messages from threads (grouped by thread)
+2. Extract claims per thread (LLM) — topic identification + 1 claim per topic
+3. Embed claims (for clustering)
+4. Cluster (UMAP + K-means) + map claims → Topic[]
+5. Analyze clusters (LLM) → topic labels, natural language summaries
 6. Calculate statistics → ReportStatistics
-7. Synthesize insights (LLM) → ReportSynthesis
+7. Synthesize executive summary (LLM) → ReportSynthesis
