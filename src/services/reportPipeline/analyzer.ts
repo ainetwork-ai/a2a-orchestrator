@@ -1,74 +1,66 @@
-import { CategorizedMessage, MessageCluster, ReportStatistics, AnalyzerResult, FilteringBreakdown } from "../../types/report";
+import { ReportStatistics, AnalyzerResult, ExtractedOpinion } from "../../types/report";
+import { PipelineTopic } from "./clusterer";
 
 /**
- * Analyze categorized messages and clusters to generate statistics
+ * Analyze extracted opinions and clusters to generate statistics
  */
 export function analyzeData(
-  messages: CategorizedMessage[],
-  clusters: MessageCluster[],
+  opinions: ExtractedOpinion[],
+  clusters: PipelineTopic[],
   threadCount: number,
-  totalMessagesBeforeSampling: number,
-  wasSampled: boolean,
-  nonSubstantiveCount: number,
-  filteringBreakdown?: FilteringBreakdown
+  segmentCount: number,
 ): AnalyzerResult {
   const statistics: ReportStatistics = {
-    totalMessages: messages.length,
+    totalOpinions: opinions.length,
+    totalSegments: segmentCount,
     totalThreads: threadCount,
-    dateRange: calculateDateRange(messages),
-    categoryDistribution: calculateCategoryDistribution(messages),
-    sentimentDistribution: calculateSentimentDistribution(messages),
+    dateRange: calculateDateRange(opinions),
+    stanceDistribution: calculateStanceDistribution(opinions),
+    speakerDistribution: calculateSpeakerDistribution(opinions),
     topTopics: calculateTopTopics(clusters),
-    averageMessagesPerThread: threadCount > 0 ? messages.length / threadCount : 0,
-    totalMessagesBeforeSampling,
-    wasSampled,
-    nonSubstantiveCount,
-    filteringBreakdown,
+    deliberation: {
+      totalOpinions: opinions.length,
+      evolvedCount: opinions.filter((op) => op.evolved).length,
+    },
   };
 
   return { statistics };
 }
 
-function calculateDateRange(messages: CategorizedMessage[]): { start: number; end: number } {
-  if (messages.length === 0) {
+function calculateDateRange(opinions: ExtractedOpinion[]): { start: number; end: number } {
+  if (opinions.length === 0) {
     const now = Date.now();
     return { start: now, end: now };
   }
 
-  const timestamps = messages.map(m => m.timestamp);
+  const timestamps = opinions.map((op) => op.timestamp);
   return {
     start: Math.min(...timestamps),
     end: Math.max(...timestamps),
   };
 }
 
-function calculateCategoryDistribution(messages: CategorizedMessage[]): Record<string, number> {
+function calculateSpeakerDistribution(opinions: ExtractedOpinion[]): Record<string, number> {
+  const distribution: Record<string, number> = {};
+  for (const op of opinions) {
+    const speaker = op.speaker || "User";
+    distribution[speaker] = (distribution[speaker] || 0) + 1;
+  }
+  return distribution;
+}
+
+function calculateStanceDistribution(opinions: ExtractedOpinion[]): Record<string, number> {
   const distribution: Record<string, number> = {};
 
-  for (const msg of messages) {
-    const category = msg.category || "other";
-    distribution[category] = (distribution[category] || 0) + 1;
+  for (const op of opinions) {
+    const stance = op.stance || "neutral";
+    distribution[stance] = (distribution[stance] || 0) + 1;
   }
 
   return distribution;
 }
 
-function calculateSentimentDistribution(messages: CategorizedMessage[]): Record<string, number> {
-  const distribution: Record<string, number> = {
-    positive: 0,
-    negative: 0,
-    neutral: 0,
-  };
-
-  for (const msg of messages) {
-    const sentiment = msg.sentiment || "neutral";
-    distribution[sentiment] = (distribution[sentiment] || 0) + 1;
-  }
-
-  return distribution;
-}
-
-function calculateTopTopics(clusters: MessageCluster[]): Array<{
+function calculateTopTopics(clusters: PipelineTopic[]): Array<{
   topic: string;
   count: number;
   percentage: number;
@@ -76,8 +68,8 @@ function calculateTopTopics(clusters: MessageCluster[]): Array<{
   const totalMessages = clusters.reduce((sum, c) => sum + c.messages.length, 0);
 
   return clusters
-    .map(cluster => ({
-      topic: cluster.topic,
+    .map((cluster) => ({
+      topic: cluster.title,
       count: cluster.messages.length,
       percentage: totalMessages > 0
         ? Math.round((cluster.messages.length / totalMessages) * 100 * 10) / 10

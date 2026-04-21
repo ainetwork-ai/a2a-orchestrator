@@ -6,12 +6,25 @@
  */
 
 import { UMAP } from "umap-js";
-import { MessageCluster, CategorizedMessage } from "../../types/report";
+import { Topic, Subtopic, Claim, ParsedMessage } from "../../types/report";
 import {
-  CategorizedEmbeddedMessage,
+  EmbeddedMessage,
   ClustererVisualization,
-  EmbeddingClustererResult,
 } from "../../types/embedding";
+
+/**
+ * Internal Topic with messages — used during pipeline, stripped in final Report.
+ * `claims` is a temporary flat array used before sub-clustering moves them into `subtopics[]`.
+ */
+export interface PipelineTopic extends Topic {
+  messages: ParsedMessage[];
+  claims: Claim[];
+}
+
+export interface ClustererResult {
+  clusters: PipelineTopic[];
+  visualization: ClustererVisualization;
+}
 
 /**
  * Default configuration for clustering
@@ -34,9 +47,9 @@ const CLUSTER_CONFIG = {
  * @returns Clusters with visualization data
  */
 export async function clusterByEmbedding(
-  messages: CategorizedEmbeddedMessage[],
+  messages: EmbeddedMessage[],
   numClusters: number = CLUSTER_CONFIG.defaultNumClusters
-): Promise<EmbeddingClustererResult> {
+): Promise<ClustererResult> {
   console.log(`[Clusterer] Starting clustering: ${messages.length} messages, target ${numClusters} clusters`);
 
   // Handle edge cases
@@ -74,7 +87,7 @@ export async function clusterByEmbedding(
   const clusterAssignments = kMeans(reduced, effectiveNumClusters);
 
   // 3. Group messages by cluster
-  const clusterMap = new Map<number, Array<CategorizedEmbeddedMessage & { x: number; y: number }>>();
+  const clusterMap = new Map<number, Array<EmbeddedMessage & { x: number; y: number }>>();
 
   messages.forEach((msg, i) => {
     const clusterId = clusterAssignments[i];
@@ -91,21 +104,20 @@ export async function clusterByEmbedding(
     });
   });
 
-  // 4. Convert to MessageCluster format (labels will be added by ClusterAnalyzer)
-  const clusters: MessageCluster[] = Array.from(clusterMap.entries())
+  // 4. Convert to PipelineTopic format (labels will be added by ClusterAnalyzer)
+  const clusters: PipelineTopic[] = Array.from(clusterMap.entries())
     .filter(([_, msgs]) => msgs.length > 0)
     .map(([clusterId, msgs]) => ({
       id: `cluster-${clusterId}`,
-      topic: `Cluster ${clusterId + 1}`, // Temporary, ClusterAnalyzer will update
+      title: `Cluster ${clusterId + 1}`,
       description: "",
       messages: msgs,
-      opinions: [], // ClusterAnalyzer will populate
+      claims: [],
+      subtopics: [],
       summary: {
-        consensus: [],
-        conflicting: [],
-        sentiment: calculateClusterSentiment(msgs),
+        text: "",
+        sentiment: "neutral" as const,
       },
-      nextSteps: [], // ClusterAnalyzer will populate
     }));
 
   // 5. Build visualization data
@@ -119,7 +131,7 @@ export async function clusterByEmbedding(
   };
 
   console.log(`[Clusterer] Complete: ${clusters.length} clusters created`);
-  const clusterSizes = clusters.map((c) => `${c.topic}(${c.messages.length})`).join(", ");
+  const clusterSizes = clusters.map((c) => `${c.title}(${c.messages.length})`).join(", ");
   console.log(`[Clusterer] Cluster sizes: ${clusterSizes}`);
 
   return { clusters, visualization };
@@ -204,49 +216,22 @@ function arraysEqual(a: number[], b: number[]): boolean {
 }
 
 /**
- * Calculate overall sentiment for a cluster
- */
-function calculateClusterSentiment(
-  messages: CategorizedMessage[]
-): "positive" | "negative" | "mixed" | "neutral" {
-  const counts = { positive: 0, negative: 0, neutral: 0 };
-
-  messages.forEach((m) => {
-    const sentiment = m.sentiment || "neutral";
-    counts[sentiment]++;
-  });
-
-  const total = messages.length;
-  if (total === 0) return "neutral";
-
-  const positiveRatio = counts.positive / total;
-  const negativeRatio = counts.negative / total;
-
-  if (positiveRatio > 0.6) return "positive";
-  if (negativeRatio > 0.6) return "negative";
-  if (counts.positive > 0 && counts.negative > 0) return "mixed";
-
-  return "neutral";
-}
-
-/**
  * Create a single cluster for small datasets
  */
 function createSingleCluster(
-  messages: CategorizedEmbeddedMessage[]
-): EmbeddingClustererResult {
-  const cluster: MessageCluster = {
+  messages: EmbeddedMessage[]
+): ClustererResult {
+  const cluster: PipelineTopic = {
     id: "cluster-0",
-    topic: "All Messages",
+    title: "All Messages",
     description: "",
     messages,
-    opinions: [],
+    claims: [],
+    subtopics: [],
     summary: {
-      consensus: [],
-      conflicting: [],
-      sentiment: calculateClusterSentiment(messages),
+      text: "",
+      sentiment: "neutral",
     },
-    nextSteps: [],
   };
 
   const visualization: ClustererVisualization = {
@@ -261,5 +246,82 @@ function createSingleCluster(
   return { clusters: [cluster], visualization };
 }
 
-// Re-export legacy function for backward compatibility during transition
-export { clusterMessages } from "./clusterer.legacy";
+const SUB_CLUSTER_CONFIG = {
+  minClaimsForSubClustering: 6,
+  maxSubtopics: 5,
+  claimsPerSubtopic: 10,
+} as const;
+
+/**
+ * Sub-cluster claims within a topic into subtopics using K-means on embeddings.
+ * Returns Subtopic[] with claims distributed by embedding similarity.
+ */
+export function subClusterTopic(
+  claims: Claim[],
+  embeddingMap: Map<string, number[]>,
+  clusterId: string
+): Subtopic[] {
+  const asSingleSubtopic = (): Subtopic[] => [{
+    id: `${clusterId}-sub-0`,
+    title: "Subtopic 1",
+    description: "",
+    claims,
+  }];
+
+  if (claims.length <= SUB_CLUSTER_CONFIG.minClaimsForSubClustering) {
+    return asSingleSubtopic();
+  }
+
+  // Extract embeddings for claims (matched by id)
+  const claimsWithEmbeddings: { claim: Claim; embedding: number[] }[] = [];
+  for (const claim of claims) {
+    const embedding = embeddingMap.get(claim.id);
+    if (embedding) {
+      claimsWithEmbeddings.push({ claim, embedding });
+    }
+  }
+
+  if (claimsWithEmbeddings.length <= SUB_CLUSTER_CONFIG.minClaimsForSubClustering) {
+    return asSingleSubtopic();
+  }
+
+  const k = Math.min(
+    Math.ceil(claimsWithEmbeddings.length / SUB_CLUSTER_CONFIG.claimsPerSubtopic),
+    SUB_CLUSTER_CONFIG.maxSubtopics
+  );
+
+  if (k <= 1) {
+    return asSingleSubtopic();
+  }
+
+  // Run K-means on raw embeddings (no UMAP needed within a topic)
+  const embeddings = claimsWithEmbeddings.map((c) => c.embedding);
+  const assignments = kMeans(embeddings, k);
+
+  // Group claims by sub-cluster
+  const subClusterMap = new Map<number, Claim[]>();
+  for (let i = 0; i < assignments.length; i++) {
+    const subId = assignments[i];
+    if (!subClusterMap.has(subId)) {
+      subClusterMap.set(subId, []);
+    }
+    subClusterMap.get(subId)!.push(claimsWithEmbeddings[i].claim);
+  }
+
+  // Add any claims that didn't have embeddings to the first subtopic
+  const claimsWithEmbeddingIds = new Set(claimsWithEmbeddings.map((c) => c.claim.id));
+  const orphanClaims = claims.filter((c) => !claimsWithEmbeddingIds.has(c.id));
+  if (orphanClaims.length > 0) {
+    const firstKey = subClusterMap.keys().next().value!;
+    subClusterMap.get(firstKey)!.push(...orphanClaims);
+  }
+
+  return Array.from(subClusterMap.entries())
+    .filter(([_, subClaims]) => subClaims.length > 0)
+    .map(([subId, subClaims]) => ({
+      id: `${clusterId}-sub-${subId}`,
+      title: `Subtopic ${subId + 1}`,
+      description: "",
+      claims: subClaims,
+    }));
+}

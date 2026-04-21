@@ -1,19 +1,18 @@
 import RequestManager from "../../world/requestManager";
 import {
-  MessageCluster,
   ReportStatistics,
   ReportSynthesis,
   SynthesizerResult,
   ReportLanguage,
-  ActionItem,
 } from "../../types/report";
+import { PipelineTopic } from "./clusterer";
 import { parseJsonResponse } from "../../utils/llm";
 
 /**
- * Synthesize all cluster analyses into a total summary
+ * Synthesize all cluster analyses into an executive summary
  */
 export async function synthesizeReport(
-  clusters: MessageCluster[],
+  clusters: PipelineTopic[],
   statistics: ReportStatistics,
   apiUrl: string,
   model: string,
@@ -22,9 +21,6 @@ export async function synthesizeReport(
   console.log(`[Synthesizer] Starting synthesis: ${clusters.length} clusters, language=${language}`);
 
   const defaultSynthesis: ReportSynthesis = {
-    overallSentiment: "neutral",
-    keyFindings: [],
-    topPriorities: [],
     executiveSummary: "",
   };
 
@@ -33,53 +29,33 @@ export async function synthesizeReport(
     return { synthesis: defaultSynthesis };
   }
 
-  // Prepare cluster summaries for the prompt
-  const clusterSummaries = clusters.map(cluster => ({
-    topic: cluster.topic,
-    messageCount: cluster.messages.length,
-    sentiment: cluster.summary.sentiment,
-    consensus: cluster.summary.consensus,
-    conflicting: cluster.summary.conflicting,
-    nextSteps: cluster.nextSteps,
+  const topicSummaries = clusters.map(cluster => ({
+    topic: cluster.title,
+    claimCount: cluster.subtopics.reduce((sum, s) => sum + s.claims.length, 0),
+    summary: cluster.summary.text,
   }));
 
   const langInstruction = language === "ko"
-    ? "IMPORTANT: Write ALL text content in Korean."
+    ? "CRITICAL: You MUST write ALL text content in Korean (한국어). Even if the input is in English, your output MUST be in Korean. Do NOT write any text in English."
     : "Write all text content in English.";
 
-  const prompt = `You are analyzing user feedback for a product/service. Synthesize the following topic analyses into an executive summary.
+  const prompt = `You are analyzing user feedback for a product/service. Synthesize the following topic summaries into an executive summary.
 
 ${langInstruction}
 
 Overall Statistics:
-- Total messages analyzed: ${statistics.totalMessages}
+- Total opinions extracted: ${statistics.totalOpinions}
 - Total threads: ${statistics.totalThreads}
-- Sentiment distribution: ${JSON.stringify(statistics.sentimentDistribution)}
 
-Topic Analyses:
-${JSON.stringify(clusterSummaries, null, 2)}
+Topic Summaries:
+${topicSummaries.map(t => `### ${t.topic} (${t.claimCount} claims)\n${t.summary}`).join("\n\n")}
 
 Instructions:
-1. Determine the overall sentiment across all topics
-2. Identify 3-5 key findings that decision makers should know
-3. Prioritize the top 3-5 action items from all topics (combine similar ones, rank by impact)
-4. Write a 2-3 sentence executive summary for busy stakeholders
+Write a concise 2-3 sentence executive summary for busy stakeholders that captures the overall themes and key takeaways across all topics.
 
 Respond in JSON format only:
 {
-  "overallSentiment": "mixed",
-  "keyFindings": [
-    "Finding 1: ...",
-    "Finding 2: ..."
-  ],
-  "topPriorities": [
-    {
-      "action": "Most important action",
-      "priority": "high",
-      "rationale": "Why this matters most"
-    }
-  ],
-  "executiveSummary": "A concise 2-3 sentence summary of the overall user feedback and recommended direction."
+  "executiveSummary": "A concise 2-3 sentence summary."
 }`;
 
   try {
@@ -88,25 +64,15 @@ Respond in JSON format only:
       apiUrl,
       model,
       [{ role: "user", content: prompt }],
-      2000,
+      1000,
       0.5
     );
 
     const parsed = parseJsonResponse<{
-      overallSentiment?: "positive" | "negative" | "mixed" | "neutral";
-      keyFindings?: string[];
-      topPriorities?: { action?: string; priority?: string; rationale?: string }[];
       executiveSummary?: string;
     }>(response);
 
     const synthesis: ReportSynthesis = {
-      overallSentiment: parsed.overallSentiment || "neutral",
-      keyFindings: parsed.keyFindings || [],
-      topPriorities: (parsed.topPriorities || []).map((step: any) => ({
-        action: step.action || "",
-        priority: step.priority || "medium",
-        rationale: step.rationale || "",
-      })).filter((step: ActionItem) => step.action),
       executiveSummary: parsed.executiveSummary || "",
     };
 
