@@ -233,9 +233,12 @@ Verifier 는 `src/world/world.ts:44` 에서 생성된다 — 여기서 `this.thr
 - [x] `world.ts:52` 의 `updateAgents()` 내부 `new Agent(persona)` 호출도 동일하게 수정 (grep 으로 추가 지점 없는지 재확인)
 
 ### 주의사항
-- Agent 인스턴스 1개가 여러 threadId 를 섞어 처리하는 경로는 현재 코드에 없다 (World 는 threadId 당 1 인스턴스, Agent 는 World 당 N 인스턴스). 이 불변식이 깨지면 Story 7.6 설계가 무효화되므로, 향후 Agent 를 thread 간 공유하는 리팩토링을 할 때 주의.
+- Agent 인스턴스 1개가 여러 threadId 를 섞어 처리하는 경로는 현재 코드에 없다 (World 는 threadId 당 1 인스턴스, Agent 는 World 당 N 인스턴스). 이 불변식이 깨지면 Story 7.6 설계가 무효화되므로, 향후 Agent 를 thread 간 공유하는 리팩토링을 할 때 주의. `threadId` 필드는 `readonly` 로 선언되어 인스턴스 내 변경도 차단됨.
 - `customFetch` 는 arrow function 으로 `this` 를 capture 해야 함 (일반 `function` 사용 시 this 바인딩 꼬임)
+- `customFetch` 정의 전에 `const originalFetch = fetch;` 로 원본을 capture — 테스트에서 `global.fetch` 를 mock 하면 `customFetch` 내부 `fetch` 호출이 자기 자신을 재호출해 무한 재귀 발생. 프로덕션에는 영향 없지만 견고성 차원.
+- **Agent Card discovery 요청에도 헤더 주입됨**: `fetchImpl` 은 `A2AClient.fromCardUrl` 호출 시 `/.well-known/agent.json` 같은 카드 조회에도 적용된다. 빌더 측 카드 엔드포인트는 헤더를 무시하므로 무해하지만 sticky routing 에는 기여 안 함 — 의도된 동작. SDK 가 per-method fetchImpl 을 지원하지 않아 우회 불가.
 - `AuthenticationHandler.headers()` 콜백 경로는 **사용하지 않는다** — 그건 auth 전용 세맨틱이고, sticky routing 용 헤더는 fetchImpl 쪽이 레이어상 맞음
+- `updateAgents()` 는 기존 `a2aClient` 연결을 명시적으로 close 하지 않는다 — `@a2a-js/sdk` 가 close API 를 제공하지 않아 현재 조치 불가. SDK 확장 시 정리 로직 추가 필요 (코드에 TODO 주석).
 - Builder 측이 `X-Thread-Id` 헤더를 vLLM 호출로 passthrough 하지 않으면 이 Story 의 효과는 0 — cross-component 계약이므로 builder 측 작업(`PHASE2_CHANGES.md` 변경 2) 이 같이 배포되어야 한다
 
 ---

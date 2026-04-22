@@ -10,7 +10,7 @@ export class Agent {
   private persona: AgentPersona;
   private a2aClient: A2AClient | null = null;
   private contextId: string | undefined;
-  private threadId: string;
+  private readonly threadId: string;
 
   constructor(persona: AgentPersona, threadId: string) {
     this.persona = persona;
@@ -28,11 +28,14 @@ export class Agent {
   private async getClient(): Promise<A2AClient> {
     if (!this.a2aClient) {
       console.log(`[${this.persona.name}] Initializing A2A client from: ${this.persona.a2aUrl}`);
+      // Capture the original fetch reference so tests that mock global fetch
+      // don't cause infinite recursion through customFetch.
+      const originalFetch = fetch;
       const customFetch: typeof fetch = (input, init) => {
         const headers = new Headers(init?.headers);
         headers.set(HEADER_THREAD_ID, sanitizeHeaderValue(this.threadId));
         headers.set(HEADER_AGENT_ID, sanitizeHeaderValue(this.persona.name));
-        return fetch(input, { ...init, headers });
+        return originalFetch(input, { ...init, headers });
       };
       this.a2aClient = await A2AClient.fromCardUrl(this.persona.a2aUrl, { fetchImpl: customFetch });
     }

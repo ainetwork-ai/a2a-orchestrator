@@ -49,6 +49,8 @@ export class World {
    * Update agents dynamically
    */
   updateAgents(agentPersonas: AgentPersona[]) {
+    // TODO: @a2a-js/sdk currently exposes no close/dispose API. When one is added,
+    // close each old Agent's a2aClient here to avoid leaking keep-alive connections.
     this.agents = agentPersonas.map(persona => new Agent(persona, this.threadId));
     console.log(`[World] Updated agents. Total: ${this.agents.length}`);
   }

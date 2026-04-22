@@ -2,8 +2,11 @@
 export const HEADER_THREAD_ID = "X-Thread-Id";
 export const HEADER_AGENT_ID = "X-Agent-Id";
 
-// Strip CR/LF to prevent HTTP header injection. threadId/agentId are internally generated,
-// but defensive sanitization is cheap and guards against future sources (user input, etc).
+// Strip control characters that can exploit HTTP header parsing:
+// - CR/LF: header injection (split headers)
+// - NUL: some parsers truncate on null byte
+// - TAB: header value folding per RFC 7230
+// threadId/agentId are internally generated, but defensive sanitization is cheap.
 export function sanitizeHeaderValue(value: string): string {
-  return value.replace(/[\r\n]/g, "");
+  return value.replace(/[\r\n\0\t]/g, "");
 }

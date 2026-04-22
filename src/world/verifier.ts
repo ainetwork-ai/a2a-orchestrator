@@ -10,7 +10,7 @@ export interface VerificationResult {
 export class Verifier {
   private apiUrl: string;
   private model: string;
-  private threadId: string;
+  private readonly threadId: string;
   private userIntent: string = "";
 
   constructor(apiUrl: string, model: string, threadId: string) {
