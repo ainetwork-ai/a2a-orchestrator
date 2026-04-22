@@ -10,13 +10,11 @@ export interface VerificationResult {
 export class Verifier {
   private apiUrl: string;
   private model: string;
-  private readonly threadId: string;
   private userIntent: string = "";
 
-  constructor(apiUrl: string, model: string, threadId: string) {
+  constructor(apiUrl: string, model: string) {
     this.apiUrl = apiUrl;
     this.model = model;
-    this.threadId = threadId;
   }
 
   /**
@@ -101,13 +99,13 @@ If should_stop is false, set stop_reason to an empty string.`;
       console.log(`\n[Verifier] Checking if conversation should stop...`);
 
       const requestManager = RequestManager.getInstance();
+      // No threadId: meta call — avoid HOL blocking behind long in-thread Agent inference.
       const response = await requestManager.request(
         this.apiUrl,
         this.model,
         [{ role: "user", content: prompt }],
         400,
-        0.3,
-        this.threadId
+        0.3
       );
 
       // Parse JSON response
