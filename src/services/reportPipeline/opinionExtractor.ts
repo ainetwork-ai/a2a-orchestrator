@@ -175,7 +175,8 @@ async function extractFromThread(
       model,
       [{ role: "user", content: prompt }],
       THREAD_EXTRACTOR_CONFIG.maxTokens,
-      THREAD_EXTRACTOR_CONFIG.temperature
+      THREAD_EXTRACTOR_CONFIG.temperature,
+      threadId
     );
 
     const parsed = parseJsonResponse<{

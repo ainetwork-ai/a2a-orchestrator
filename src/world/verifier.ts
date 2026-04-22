@@ -10,11 +10,13 @@ export interface VerificationResult {
 export class Verifier {
   private apiUrl: string;
   private model: string;
+  private threadId: string;
   private userIntent: string = "";
 
-  constructor(apiUrl: string, model: string) {
+  constructor(apiUrl: string, model: string, threadId: string) {
     this.apiUrl = apiUrl;
     this.model = model;
+    this.threadId = threadId;
   }
 
   /**
@@ -104,7 +106,8 @@ If should_stop is false, set stop_reason to an empty string.`;
         this.model,
         [{ role: "user", content: prompt }],
         400,
-        0.3
+        0.3,
+        this.threadId
       );
 
       // Parse JSON response

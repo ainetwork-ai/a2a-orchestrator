@@ -2,6 +2,10 @@
  * Utility functions for the report pipeline
  */
 
+// Sticky-routing headers — must match nginx `$http_x_thread_id` / `$http_x_agent_id`
+export const HEADER_THREAD_ID = "X-Thread-Id";
+export const HEADER_AGENT_ID = "X-Agent-Id";
+
 /**
  * Parse JSON response from LLM, handling markdown code fences
  * LLMs often wrap JSON in ```json or ``` blocks, this function strips those

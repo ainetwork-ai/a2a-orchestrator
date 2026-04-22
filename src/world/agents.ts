@@ -4,14 +4,17 @@ import { A2AClient } from "@a2a-js/sdk/client";
 import { MessageSendParams, Message as A2AMessage } from "@a2a-js/sdk";
 import { v4 as uuidv4 } from "uuid";
 import { Message, AgentPersona } from "../types";
+import { HEADER_THREAD_ID, HEADER_AGENT_ID } from "../utils/llm";
 
 export class Agent {
   private persona: AgentPersona;
   private a2aClient: A2AClient | null = null;
   private contextId: string | undefined;
+  private threadId: string;
 
-  constructor(persona: AgentPersona) {
+  constructor(persona: AgentPersona, threadId: string) {
     this.persona = persona;
+    this.threadId = threadId;
   }
 
   getName(): string {
@@ -25,7 +28,13 @@ export class Agent {
   private async getClient(): Promise<A2AClient> {
     if (!this.a2aClient) {
       console.log(`[${this.persona.name}] Initializing A2A client from: ${this.persona.a2aUrl}`);
-      this.a2aClient = await A2AClient.fromCardUrl(this.persona.a2aUrl);
+      const customFetch: typeof fetch = (input, init) => {
+        const headers = new Headers(init?.headers);
+        headers.set(HEADER_THREAD_ID, this.threadId);
+        headers.set(HEADER_AGENT_ID, this.persona.name);
+        return fetch(input, { ...init, headers });
+      };
+      this.a2aClient = await A2AClient.fromCardUrl(this.persona.a2aUrl, { fetchImpl: customFetch });
     }
     return this.a2aClient;
   }

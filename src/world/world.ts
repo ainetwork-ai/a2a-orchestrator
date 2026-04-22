@@ -39,9 +39,9 @@ export class World {
     this.userId = userId;
     // Use provided personas or default to empty array
     const personas = agentPersonas && agentPersonas.length > 0 ? agentPersonas : [];
-    this.agents = personas.map((persona: AgentPersona) => new Agent(persona));
+    this.agents = personas.map((persona: AgentPersona) => new Agent(persona, threadId));
     this.messageDAG = new MessageDAG();
-    this.verifier = new Verifier(apiUrl, model);
+    this.verifier = new Verifier(apiUrl, model, threadId);
     this.messageIdCounter = 0;
   }
 
@@ -49,7 +49,7 @@ export class World {
    * Update agents dynamically
    */
   updateAgents(agentPersonas: AgentPersona[]) {
-    this.agents = agentPersonas.map(persona => new Agent(persona));
+    this.agents = agentPersonas.map(persona => new Agent(persona, this.threadId));
     console.log(`[World] Updated agents. Total: ${this.agents.length}`);
   }
 
@@ -159,7 +159,8 @@ Respond in JSON format only:
         this.model,
         [{ role: "user", content: prompt }],
         400,
-        0.3
+        0.3,
+        this.threadId
       );
 
       // Parse JSON response
@@ -252,7 +253,8 @@ Respond in JSON format only:
         this.model,
         [{ role: "user", content: prompt }],
         600,
-        0.3
+        0.3,
+        this.threadId
       );
 
       // Parse JSON response

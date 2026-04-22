@@ -1,4 +1,5 @@
 import https from "https";
+import { HEADER_THREAD_ID, HEADER_AGENT_ID } from "../utils/llm";
 
 // Create a custom agent that allows self-signed certificates
 const httpsAgent = new https.Agent({
@@ -11,6 +12,8 @@ interface QueuedRequest {
   messages: Array<{ role: string; content: string }>;
   maxTokens?: number;
   temperature?: number;
+  threadId?: string;
+  agentId?: string;
   resolve: (value: string) => void;
   reject: (error: Error) => void;
 }
@@ -61,7 +64,9 @@ class RequestManager {
     model: string,
     messages: Array<{ role: string; content: string }>,
     maxTokens: number = 1500,
-    temperature: number = 0.7
+    temperature: number = 0.7,
+    threadId?: string,
+    agentId?: string
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       this.queue.push({
@@ -70,6 +75,8 @@ class RequestManager {
         messages,
         maxTokens,
         temperature,
+        threadId,
+        agentId,
         resolve,
         reject,
       });
@@ -140,7 +147,7 @@ class RequestManager {
   }
 
   private async executeRequest(request: QueuedRequest): Promise<string> {
-    const { apiUrl, model, messages, maxTokens, temperature } = request;
+    const { apiUrl, model, messages, maxTokens, temperature, threadId, agentId } = request;
 
     const requestBody = {
       model,
@@ -150,11 +157,15 @@ class RequestManager {
       stream: false,
     };
 
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (threadId) headers[HEADER_THREAD_ID] = threadId;
+    if (agentId) headers[HEADER_AGENT_ID] = agentId;
+
     const response = await fetch(apiUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(requestBody),
       // @ts-ignore - agent option for self-signed certificates
       agent: apiUrl.startsWith("https") ? httpsAgent : undefined,
