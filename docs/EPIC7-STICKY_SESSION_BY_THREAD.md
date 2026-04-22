@@ -282,3 +282,33 @@ Verifier 는 `src/world/world.ts:44` 에서 생성된다 — 여기서 `this.thr
 - [ ] 기존 기능 무영향: nginx 설정 변경 전 배포해도 에이전트 응답이 정상 (nginx 는 `hash` 설정 전까지 헤더 무시)
 - [x] Story 7.5 의 3개 제외 지점에 threadId가 전달되지 않음을 grep으로 확인
 - [ ] Builder 측 passthrough 구현과 동시 배포되어야 **end-to-end sticky routing** 발효 — 이 조건은 orchestrator 단독으로 만족 불가, cross-component 체크리스트로 분리
+
+---
+
+## Post-deploy tuning: 메타 콜 제외 (follow-up fix)
+
+### 배경
+EPIC7 초기 설계는 "thread-scope LLM 호출 전부" 에 threadId 를 전달하는 것이었으나, 실제 동작 관찰 결과 **짧은 메타 LLM 콜이 같은 thread 의 장시간 Agent inference 뒤에 HOL 블로킹되는 병목**이 확인됨. 이들 메타 콜은 prompt 가 작아 prefix cache hit 이득이 제한적인 반면, critical path (다음 speaker 결정, 대화 종료 판단 등) 에 있어 응답 지연으로 직결됨.
+
+### 결정
+**메타 콜 (prompt 작음, critical path) → threadId 제거, 분산 처리**
+**대화 응답/리포트 콜 (prompt 큼, cache hit 이득 큼) → threadId 유지**
+
+| 호출 | 경로 | 튜닝 후 | 사유 |
+|---|---|---|---|
+| Agent Selection (`world.ts:157`) | RequestManager | threadId **제거** | 짧은 prompt + critical path |
+| Block Summary + Next Speaker (`world.ts:249`) | RequestManager | threadId **제거** | 짧은 prompt + critical path |
+| Verifier (`verifier.ts:102`) | RequestManager | threadId **제거** | 짧은 prompt + critical path |
+| Agent 대화 응답 (`agents.ts`) | A2A → Builder → vLLM | threadId/agentId **유지** | 30k prompt, cache hit 이득 큼 |
+| Thread-level opinion extraction (`opinionExtractor.ts:172`) | RequestManager | threadId **유지** | 전체 대화 prompt, 오프라인이라 critical path 아니지만 cache hit 이득 큼 |
+
+### 영향
+- `Verifier` 클래스에서 `threadId` 필드/생성자 파라미터 제거 — 더 이상 쓰이지 않음
+- `World` 의 `new Verifier(apiUrl, model, threadId)` → `new Verifier(apiUrl, model)` 원복
+- Story 7.2, 7.3 의 태스크 체크리스트는 **배포된 상태 (threadId 전달)** 기준으로 남아 있으며, 이 섹션이 후속 튜닝을 기록
+- nginx hash routing 은 그대로 유지 — 대화 응답이 같은 인스턴스로 고정되며, 메타 콜은 `least_conn` 에 가까운 기본 분산
+
+### 검증
+- [ ] 배포 후 같은 thread 연속 턴에서 대화 응답 latency 변화 관찰 (개선 기대)
+- [ ] 메타 콜이 다양한 vLLM 인스턴스로 분산되는지 access log 샘플링
+- [ ] prefix cache hit rate 가 대화 응답 경로에서는 유지되는지 재확인

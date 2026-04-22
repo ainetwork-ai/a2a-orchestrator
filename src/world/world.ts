@@ -41,7 +41,7 @@ export class World {
     const personas = agentPersonas && agentPersonas.length > 0 ? agentPersonas : [];
     this.agents = personas.map((persona: AgentPersona) => new Agent(persona, threadId));
     this.messageDAG = new MessageDAG();
-    this.verifier = new Verifier(apiUrl, model, threadId);
+    this.verifier = new Verifier(apiUrl, model);
     this.messageIdCounter = 0;
   }
 
@@ -156,13 +156,13 @@ Respond in JSON format only:
       console.log(`[Agent Selection] User message: ${userMessage.content.substring(0, 100)}...`);
 
       const requestManager = RequestManager.getInstance();
+      // No threadId: meta call — avoid HOL blocking behind long in-thread Agent inference.
       const response = await requestManager.request(
         this.apiUrl,
         this.model,
         [{ role: "user", content: prompt }],
         400,
-        0.3,
-        this.threadId
+        0.3
       );
 
       // Parse JSON response
@@ -250,13 +250,13 @@ Respond in JSON format only:
       console.log(`[Block] Full prompt:\n${prompt}\n`);
 
       const requestManager = RequestManager.getInstance();
+      // No threadId: meta call — avoid HOL blocking behind long in-thread Agent inference.
       const response = await requestManager.request(
         this.apiUrl,
         this.model,
         [{ role: "user", content: prompt }],
         600,
-        0.3,
-        this.threadId
+        0.3
       );
 
       // Parse JSON response
