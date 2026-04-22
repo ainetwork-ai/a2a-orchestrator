@@ -14,9 +14,11 @@
 - `least_conn` 라우팅으로 같은 thread의 2턴차 요청이 다른 인스턴스로 분산 → KV cache miss 폭증 → prefill 시간 3초 소요
 
 ### 해결 전략
-- LLM 호출 시 HTTP 헤더로 `X-Thread-Id` (주 키), `X-Agent-Id` (보조 키)를 전달
+- 직접 LLM 호출 경로 (RequestManager): HTTP 헤더로 `X-Thread-Id` 전달
+- A2A Agent 호출 경로 (builder 경유): `X-Thread-Id` + `X-Agent-Id` 둘 다 전달 — 같은 thread 안에서 여러 agent 가 호출돼도 agent 단위 분산이 가능하도록 보조 키 제공
 - nginx가 `hash $http_x_thread_id consistent` 로 라우팅 → 같은 thread 요청은 같은 인스턴스로 고정
 - 같은 thread의 2턴차부터 prefix cache hit → prefill 3초 → 0.3초 기대
+- 헤더 상수 및 `sanitizeHeaderValue()` 는 `src/utils/headers.ts` 에 모여있음 (모듈 경계 분리 + CR/LF 인젝션 방어)
 
 ### Orchestrator 측 작업 범위
 `RequestManager.request()` 를 사용하는 5개 호출 지점 중 **thread scope가 있는** 4개 지점에 threadId 전달:
@@ -41,41 +43,48 @@ A2A 프로토콜에서 `contextId` 는 task 별로 새로 발급되는 게 일�
 - Builder (이 EPIC 범위 밖): 수신한 A2A 요청의 `X-Thread-Id` 헤더를 읽어서 LLM 호출에 그대로 전달. 헤더 없으면 (대시보드 직접 호출 등 standalone) `contextId` 로 fallback.
 
 ## 목표
-- `RequestManager.request()` 가 optional `threadId` / `agentId` 파라미터를 받아 fetch 헤더로 주입한다
+- `RequestManager.request()` 가 optional `threadId` 파라미터를 받아 fetch 헤더로 주입한다
 - `world.ts`, `verifier.ts`, `opinionExtractor.ts` 의 thread-scope LLM 호출이 threadId를 전달한다
-- `Agent.respond()` 의 A2A HTTP 요청에도 `X-Thread-Id` 헤더가 실려 builder 가 passthrough 할 수 있다
+- `Agent.respond()` 의 A2A HTTP 요청에는 `X-Thread-Id` + `X-Agent-Id` 헤더가 실려 builder 가 passthrough 할 수 있다
+- 모든 헤더 값은 `sanitizeHeaderValue()` 로 CR/LF strip (defensive)
 - threadId 없는 호출은 종전과 동일 동작 (헤더 없이 요청) — 기존 기능 무영향
 - nginx 재구성 없이도 orchestrator 단독 배포 가능 (헤더가 있어도 nginx가 무시하면 종전 라우팅)
 
 ---
 
-## Story 7.1: RequestManager에 threadId/agentId 헤더 주입 지원
+## Story 7.1: RequestManager에 threadId 헤더 주입 지원
 
-**수정 파일:** `src/world/requestManager.ts`
+**수정 파일:** `src/world/requestManager.ts`, `src/utils/headers.ts` (신규)
 
 ### 배경
-`RequestManager.request()` 는 현재 `apiUrl`, `model`, `messages`, `maxTokens`, `temperature` 5개 파라미터만 받는다. nginx sticky routing을 위해 optional `threadId`, `agentId` 파라미터를 추가하고, 해당 값이 전달되면 fetch 호출에 `X-Thread-Id`, `X-Agent-Id` 헤더를 주입한다.
+`RequestManager.request()` 는 현재 `apiUrl`, `model`, `messages`, `maxTokens`, `temperature` 5개 파라미터만 받는다. nginx sticky routing을 위해 optional `threadId` 파라미터를 추가하고, 값이 전달되면 fetch 호출에 `X-Thread-Id` 헤더를 주입한다.
 
-현재 `QueuedRequest` 인터페이스 (라인 8-16) 와 `executeRequest()` (라인 142-180) 둘 다 수정 대상.
+> **PR 리뷰 반영**: 초기 설계는 `agentId` 도 함께 받았지만 RequestManager 경로의 모든 호출자 (`world.ts`, `verifier.ts`, `opinionExtractor.ts`) 가 `threadId` 만 전달해 dead code 였음 → 제거. A2A Agent 경로의 `X-Agent-Id` 는 Story 7.6 에서 별도 주입됨.
+
+현재 `QueuedRequest` 인터페이스 (라인 9-18) 와 `executeRequest()` (라인 148-188) 둘 다 수정 대상. 헤더 상수/새니타이저는 `src/utils/headers.ts` 에 분리한다.
 
 ### 태스크
 
+#### 헤더 유틸 모듈 신규 생성
+- [x] `src/utils/headers.ts` 생성: `HEADER_THREAD_ID`, `HEADER_AGENT_ID` 상수 + `sanitizeHeaderValue()` 함수 export (CR/LF strip)
+
 #### QueuedRequest 타입 확장
-- [x] `QueuedRequest` 인터페이스에 `threadId?: string`, `agentId?: string` 필드 추가 (라인 8-16)
+- [x] `QueuedRequest` 인터페이스에 `threadId?: string` 필드 추가
 
 #### request() 시그니처 확장
-- [x] `request()` 메서드에 `threadId?: string`, `agentId?: string` 파라미터 추가 (라인 59-65)
-- [x] `this.queue.push(...)` 에 전달되는 객체에 `threadId`, `agentId` 포함 (라인 67-75)
+- [x] `request()` 메서드에 `threadId?: string` 파라미터 추가
+- [x] `this.queue.push(...)` 에 전달되는 객체에 `threadId` 포함
 
 #### executeRequest() 헤더 주입
-- [x] `executeRequest()` 에서 `threadId`, `agentId` 를 request 에서 destructure (라인 143)
-- [x] fetch 호출 전에 `headers: Record<string, string>` 를 `{"Content-Type": "application/json"}` 로 초기화하고, `threadId` / `agentId` 가 truthy 일 때만 조건부로 `X-Thread-Id`, `X-Agent-Id` 헤더 추가
-- [x] `fetch(apiUrl, {...})` 의 `headers` 를 새로 만든 `headers` 변수로 교체 (라인 153-161)
+- [x] `executeRequest()` 에서 `threadId` 를 request 에서 destructure
+- [x] fetch 호출 전에 `headers: Record<string, string>` 를 `{"Content-Type": "application/json"}` 로 초기화하고, `threadId` 가 truthy 일 때 `sanitizeHeaderValue(threadId)` 를 `HEADER_THREAD_ID` 에 주입
+- [x] `fetch(apiUrl, {...})` 의 `headers` 를 새로 만든 `headers` 변수로 교체
 
 ### 주의사항
 - optional 파라미터이므로 기존 호출자 (Story 7.2~7.4 이전 상태) 는 그대로 동작해야 한다
 - 빈 문자열(`""`) 도 falsy로 처리되어 헤더가 주입되지 않아야 한다 (`if (threadId)` 체크로 처리됨)
 - 헤더 주입은 executeRequest() 내부에서만 — retry 시에도 동일 헤더로 재시도되어야 한다 (`executeWithRetry()` 는 수정 불필요, request 객체를 그대로 넘기므로 자동 보장)
+- `sanitizeHeaderValue()` 는 defensive — 현재 threadId 는 내부 생성값이지만 향후 외부 입력 경로가 생겨도 인젝션 방어됨
 
 ---
 
@@ -101,7 +110,7 @@ A2A 프로토콜에서 `contextId` 는 task 별로 새로 발급되는 게 일�
 - [x] `requestManager.request(this.apiUrl, this.model, [...], 600, 0.3)` 호출 끝에 `this.threadId` 인자 추가
 
 ### 주의사항
-- `agentId` 는 전달하지 않는다 — 이 두 호출은 "thread에 속한 어떤 agent가 응답할지 결정"하는 메타 레벨이라 특정 agentId에 귀속되지 않음. threadId 하나로 충분.
+- 이 두 호출은 "thread에 속한 어떤 agent가 응답할지 결정"하는 메타 레벨 LLM 호출이라 `threadId` 만으로 sticky routing 키가 충분하다.
 
 ---
 
@@ -156,7 +165,6 @@ Verifier 는 `src/world/world.ts:44` 에서 생성된다 — 여기서 `this.thr
 - [x] 라인 173-179 의 `requestManager.request(apiUrl, model, [...], THREAD_EXTRACTOR_CONFIG.maxTokens, THREAD_EXTRACTOR_CONFIG.temperature)` 끝에 `threadId` 인자 추가
 
 ### 주의사항
-- `agentId` 는 전달하지 않는다 (report 파이프라인은 agent 단위가 아님)
 - segment-level (`extractFromSegment`) 은 수정하지 않는다 — Story 7.5에서 명시적으로 제외 처리
 
 ---
@@ -209,13 +217,13 @@ Verifier 는 `src/world/world.ts:44` 에서 생성된다 — 여기서 `this.thr
 - [x] 생성자 본문에 `this.threadId = threadId;` 추가
 
 #### A2A Client 초기화 시 custom fetchImpl 주입
-- [x] `getClient()` (라인 25-31) 에서 `A2AClient.fromCardUrl(this.persona.a2aUrl)` 호출을 `A2AClient.fromCardUrl(this.persona.a2aUrl, { fetchImpl: customFetch })` 로 변경
-- [x] `customFetch` 는 기본 `fetch` 를 호출하되, 두 번째 인자의 `headers` 에 `X-Thread-Id: this.threadId`, `X-Agent-Id: this.persona.name` 을 추가하는 wrapper 함수
+- [x] `getClient()` (라인 28-40) 에서 `A2AClient.fromCardUrl(this.persona.a2aUrl)` 호출을 `A2AClient.fromCardUrl(this.persona.a2aUrl, { fetchImpl: customFetch })` 로 변경
+- [x] `customFetch` 는 기본 `fetch` 를 호출하되, 두 번째 인자의 `headers` 에 sanitized `X-Thread-Id`, `X-Agent-Id` 를 추가하는 wrapper 함수. 상수/새니타이저는 `src/utils/headers.ts` 에서 import
   ```ts
   const customFetch: typeof fetch = (input, init) => {
     const headers = new Headers(init?.headers);
-    headers.set("X-Thread-Id", this.threadId);
-    headers.set("X-Agent-Id", this.persona.name);
+    headers.set(HEADER_THREAD_ID, sanitizeHeaderValue(this.threadId));
+    headers.set(HEADER_AGENT_ID, sanitizeHeaderValue(this.persona.name));
     return fetch(input, { ...init, headers });
   };
   ```
@@ -245,8 +253,9 @@ Verifier 는 `src/world/world.ts:44` 에서 생성된다 — 여기서 `this.thr
 - nginx 측 `$http_x_thread_id` / `$http_x_agent_id` 와 매칭되어야 함 (nginx 는 헤더 이름을 lowercase + underscore 로 변환)
 
 ### 타입 시그니처
-- `threadId`, `agentId` 는 `string | undefined` — null 사용 금지
-- Verifier 생성자의 threadId 는 required (Story 7.3), RequestManager 의 그것은 optional (Story 7.1)
+- `threadId` 는 `string | undefined` — null 사용 금지
+- Verifier/Agent 생성자의 threadId 는 required (Story 7.3, 7.6), RequestManager 의 그것은 optional (Story 7.1)
+- 헤더에 주입되는 모든 값은 `sanitizeHeaderValue()` 를 거친다 (CR/LF strip)
 
 ### 금지사항
 - **다른 LLM 관련 코드를 리팩토링하지 말 것** — 이 EPIC은 헤더 전달 단일 목적
@@ -258,7 +267,8 @@ Verifier 는 `src/world/world.ts:44` 에서 생성된다 — 여기서 `this.thr
 
 ## 완료 조건
 
-- [x] `RequestManager.request()` 가 optional `threadId`, `agentId` 를 받는다
+- [x] `RequestManager.request()` 가 optional `threadId` 를 받는다
+- [x] `src/utils/headers.ts` 가 헤더 상수 + `sanitizeHeaderValue()` 를 제공하고, requestManager/agents 가 이를 사용한다
 - [x] `World` 의 2개 requestManager 호출이 `this.threadId` 를 전달한다
 - [x] `Verifier` 생성자가 `threadId` 를 받고, `verify()` 내부 requestManager 호출이 전달한다
 - [x] `extractFromThread()` 내부 requestManager 호출이 `threadId` 를 전달한다
