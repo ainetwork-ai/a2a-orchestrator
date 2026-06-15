@@ -10,6 +10,7 @@ import {
   collectAgentUnion,
   isLocalAgentUrl,
   resolveMessage,
+  SESSION_FALLBACK_ADDRESS,
   threadToEnvelope,
 } from "./transform";
 import type { DmThreadEnvelope } from "./contract";
@@ -31,16 +32,16 @@ test("classifyOwner: 혼합 대소문자 지갑도 wallet", () => {
   assert.equal(classifyOwner(addr).kind, "wallet");
 });
 
-test("classifyOwner: uuid 형태 sessionId는 session", () => {
+test("classifyOwner: uuid 형태 비로그인 세션은 지정 주소 wallet으로 귀속", () => {
   const o = classifyOwner("550e8400-e29b-41d4-a716-446655440000");
-  assert.deepEqual(o, {
-    kind: "session",
-    sessionId: "550e8400-e29b-41d4-a716-446655440000",
-  });
+  assert.deepEqual(o, { kind: "wallet", address: SESSION_FALLBACK_ADDRESS });
 });
 
-test("classifyOwner: 0x지만 40hex 아니면 session", () => {
-  assert.equal(classifyOwner("0x123").kind, "session");
+test("classifyOwner: 0x지만 40hex 아니면 지정 주소 wallet으로 귀속", () => {
+  assert.deepEqual(classifyOwner("0x123"), {
+    kind: "wallet",
+    address: SESSION_FALLBACK_ADDRESS,
+  });
 });
 
 test("isLocalAgentUrl: localhost/127.0.0.1/0.0.0.0 제외, 실서비스는 통과", () => {
@@ -155,7 +156,10 @@ test("threadToEnvelope: 미매칭 메시지 격리 + agentUrls dedup + owner 분
   const { envelope, droppedMessages } = threadToEnvelope(thread, messages);
 
   assert.equal(envelope.sourceId, "t1");
-  assert.deepEqual(envelope.owner, { kind: "session", sessionId: "session-xyz" });
+  assert.deepEqual(envelope.owner, {
+    kind: "wallet",
+    address: SESSION_FALLBACK_ADDRESS,
+  });
   assert.deepEqual(envelope.agentUrls, ["https://a.example/card"]); // dedup
   assert.equal(envelope.messages.length, 2);
   assert.equal(droppedMessages.length, 1);

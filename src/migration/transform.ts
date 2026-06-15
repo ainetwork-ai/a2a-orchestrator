@@ -12,6 +12,12 @@ import type {
 /** Base 지갑 주소 모양(0x + 40 hex). 체크섬은 안 봄 — 대/소문자 혼합 다 수용. */
 const WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 
+/**
+ * wallet 아닌 opaque userId(비로그인 세션) thread를 전부 귀속시킬 지정 wallet 주소.
+ * 세션 단위 구분 없이 단일 유저로 몰아넣는다(소스 정책).
+ */
+export const SESSION_FALLBACK_ADDRESS = "0x2935Bb8564c672401EC62dF716A03456068AC612";
+
 /** user 발화 speaker 리터럴. orchestrator world.ts:305 `speaker: "User"`. */
 const USER_SPEAKER = "User";
 
@@ -34,15 +40,15 @@ export function isLocalAgentUrl(url: string): boolean {
 /**
  * thread.userId로 owner 분류.
  * - 없음(레거시 thread, userId 저장 이전) → unknown (backend가 공유 "unknown user (legacy)"로 적재)
- * - 지갑 주소 모양 → wallet
- * - 그 외 opaque string → session
+ * - 지갑 주소 모양 → wallet (해당 주소)
+ * - 그 외 opaque string(비로그인 세션) → wallet (지정 SESSION_FALLBACK_ADDRESS로 전부 귀속)
  * orchestrator엔 세션 스토어가 없어 userId는 opaque — shape로 판정한다(계약 §4.2 A안).
  */
 export function classifyOwner(userId: string | undefined | null): OwnerRef {
   if (!userId) return { kind: "unknown" };
   return WALLET_RE.test(userId)
     ? { kind: "wallet", address: userId }
-    : { kind: "session", sessionId: userId };
+    : { kind: "wallet", address: SESSION_FALLBACK_ADDRESS };
 }
 
 export type MessageResult =
