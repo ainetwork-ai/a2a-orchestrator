@@ -29,6 +29,7 @@ import {
 import {
   batchThreads,
   collectAgentUnion,
+  SESSION_FALLBACK_ADDRESS,
   threadToEnvelope,
 } from "../migration/transform";
 import type {
@@ -196,6 +197,7 @@ async function main(): Promise<void> {
 
     // ---- 3. dms ----
     let legacyCount = 0; // owner(userId) 없는 레거시 thread → owner=unknown 으로 보존
+    let sessionFallbackCount = 0; // wallet 아닌 비로그인 세션 → 지정 주소로 귀속
     const droppedLog: Array<{ thread: string; messageId: string; speaker: string }> = [];
     const envelopes: DmThreadEnvelope[] = [];
 
@@ -203,6 +205,13 @@ async function main(): Promise<void> {
       if (!thread.userId) legacyCount++;
       const messages = await readThreadMessages(redis, thread.id);
       const { envelope, droppedMessages } = threadToEnvelope(thread, messages);
+      if (
+        envelope.owner.kind === "wallet" &&
+        envelope.owner.address === SESSION_FALLBACK_ADDRESS &&
+        thread.userId !== SESSION_FALLBACK_ADDRESS
+      ) {
+        sessionFallbackCount++;
+      }
       for (const d of droppedMessages) {
         droppedLog.push({ thread: thread.id, ...d });
       }
@@ -213,6 +222,12 @@ async function main(): Promise<void> {
       console.warn(
         `ℹ owner(userId) 없는 레거시 thread ${legacyCount}건 → owner=unknown ` +
           `(공유 "unknown user (legacy)"로 보존, 제외 안 함)`,
+      );
+    }
+    if (sessionFallbackCount > 0) {
+      console.warn(
+        `ℹ wallet 아닌 비로그인 세션 thread ${sessionFallbackCount}건 → ` +
+          `지정 주소 ${SESSION_FALLBACK_ADDRESS}로 전부 귀속(세션 단위 구분 없음)`,
       );
     }
     if (droppedLog.length > 0) {
