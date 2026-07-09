@@ -224,33 +224,71 @@ class ThreadManager {
   }
 
   /**
-   * Merge incoming agents into an existing thread (add-only, idempotent).
+   * Merge incoming agents into an existing thread, identity-consistent (F3).
    *
-   * An incoming agent matches an existing one by a2aUrl when present, else by
-   * name (names are unique within a thread per the ingest contract, so this is
-   * the safe fallback when a2aUrl is absent — and it avoids empty-string
-   * collisions among multiple a2aUrl-less agents).
+   * ainspace posts the user turn first (its roster may lack backendAgentId and
+   * even a2aUrl) and agent turns later (carrying backendAgentId/a2aUrl from the
+   * SSE stream), and the backend may suffix display names ("WarmHeart" →
+   * "WarmHeart22"). So a matched later post BACKFILLS the earlier roster entry's
+   * missing fields rather than being dropped or duplicated; an unmatched agent
+   * is added as before. Backfill never overwrites an already-non-empty field.
    */
   private mergeAgents(thread: Thread, incoming: IngestAgentInput[]): void {
     const added: AgentPersona[] = [];
+    let backfilled = false;
     for (const inc of incoming) {
-      const match = thread.agents.find(
-        (ex) => (inc.a2aUrl ? ex.a2aUrl === inc.a2aUrl : false) || ex.name === inc.name
-      );
-      if (match) continue;
+      const match = this.findExistingAgent(thread, inc);
+      if (match) {
+        if (!match.a2aUrl && inc.a2aUrl) {
+          match.a2aUrl = inc.a2aUrl;
+          backfilled = true;
+        }
+        if (!match.backendAgentId && inc.backendAgentId) {
+          match.backendAgentId = inc.backendAgentId;
+          backfilled = true;
+        }
+        if (!match.role && inc.role) {
+          match.role = inc.role;
+          backfilled = true;
+        }
+        continue;
+      }
       const persona = this.toPersona(inc);
       thread.agents.push(persona);
       added.push(persona);
     }
 
-    if (added.length > 0) {
+    if (added.length > 0 || backfilled) {
       thread.updatedAt = Date.now();
       const world = this.worlds.get(thread.id);
       if (world) world.updateAgents(thread.agents);
       this.saveThreadToRedis(thread);
-      this.registerAgents(added);
-      console.log(`[ThreadManager] Merged ${added.length} new agent(s) into thread ${thread.id}`);
+      // Re-register all: a backfilled a2aUrl can make a previously
+      // unregisterable entry registerable. orchestrator:agents is a SET and
+      // registerAgents filters by a2aUrl, so re-registering all is idempotent.
+      this.registerAgents(thread.agents);
+      console.log(
+        `[ThreadManager] Merged agents into thread ${thread.id} (added ${added.length}, backfilled=${backfilled})`
+      );
     }
+  }
+
+  /**
+   * Find the existing thread agent an incoming agent refers to, by key
+   * preference: backendAgentId (both present) → a2aUrl (both present,
+   * non-empty) → exact name. Stronger keys win so an id-bearing / name-suffixed
+   * later post still resolves to the earlier user-turn roster entry.
+   */
+  private findExistingAgent(thread: Thread, inc: IngestAgentInput): AgentPersona | undefined {
+    if (inc.backendAgentId) {
+      const byId = thread.agents.find((ex) => ex.backendAgentId === inc.backendAgentId);
+      if (byId) return byId;
+    }
+    if (inc.a2aUrl) {
+      const byUrl = thread.agents.find((ex) => ex.a2aUrl === inc.a2aUrl);
+      if (byUrl) return byUrl;
+    }
+    return thread.agents.find((ex) => ex.name === inc.name);
   }
 
   /**
