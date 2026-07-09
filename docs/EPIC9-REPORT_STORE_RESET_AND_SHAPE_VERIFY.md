@@ -51,10 +51,10 @@ backfill 직전 1회, orchestrator 정지 상태에서 대화·리포트 Redis �
 - `src/services/agentService.ts` — `orchestrator:agents`.
 
 ### 태스크
-- [ ] `src/scripts/reset-report-store.ts`: `initRedis` 후 `redis.keys` / `SCAN`으로 다음 삭제 — `thread:*`, `threads:list`, `messages:*`, `orchestrator:agents`, `report:job:*`, `report:cache:*`.
-- [ ] **`emb:msg:*` 는 삭제하지 않는다**(임베딩 캐시 보존).
-- [ ] dryRun 기본(각 키군 카운트만 출력), `--execute`로 실제 삭제. 삭제 건수 로그.
-- [ ] 사용법 주석: **orchestrator 정지 → 이 스크립트 실행 → 재기동 → (EPIC35) backfill** 순서 명시.
+- [x] `src/scripts/reset-report-store.ts`: `initRedis` 후 `SCAN`(scanIterator)으로 다음 삭제 — `thread:*`, `threads:list`, `messages:*`, `orchestrator:agents`, `report:job:*`, `report:cache:*`.
+- [x] **`emb:msg:*` 는 삭제하지 않는다**(임베딩 캐시 보존). 삭제 대상에 `emb:` 키가 섞이면 중단하는 안전 가드 추가.
+- [x] dryRun 기본(각 키군 카운트만 출력 + 보존 `emb:msg:*` 카운트), `--execute`로 실제 삭제. 삭제 건수 로그.
+- [x] 사용법 주석: **dual-write ON → orchestrator 정지 → 이 스크립트 실행 → 재기동 → (EPIC35) backfill** 순서 명시.
 
 ### 주의사항
 - 반드시 orchestrator **정지 상태**에서 실행(실행 중이면 in-memory와 Redis가 어긋남). 실행 후 재기동해야 backfill이 채운 in-memory를 report가 읽는다.
@@ -64,6 +64,8 @@ backfill 직전 1회, orchestrator 정지 상태에서 대화·리포트 Redis �
 ---
 
 ## Story 9.2: report 파이프라인 new-shape 검증
+
+> **런타임 전용 — 미실행(runtime-unverified).** live orchestrator + Redis + 임베딩 + EPIC35 backfill 완료가 전제라 정적 구현으로는 검증 불가. 아래 태스크는 절차 명세로 유지하며, 초기화(9.1)·backfill(EPIC35) 이후 운영자가 실행해 결과를 본 문서에 forward-only 기록한다. (구현 현황은 문서 하단 참조.)
 
 **수정 파일:** `docs/EPIC9-REPORT_STORE_RESET_AND_SHAPE_VERIFY.md`(검증 결과 기록)
 
@@ -102,3 +104,19 @@ backfill(EPIC35) 이후 backend-유래 데이터로 리포트를 실제 생성�
 - [ ] 초기화+재기동 후 orchestrator in-memory가 비어 있다(중복 재-mirror 방지 확인).
 - [ ] backfill(EPIC35) 후 `POST /api/reports`가 backend-유래 데이터로 topic/claim을 정상 생성하고, human 실명이 노출되지 않는다.
 - [ ] 파이프라인 크래시/결손 없음(있으면 forward-only 기록 + 후속 이슈).
+
+> 완료 조건 4건은 **런타임 검증 항목**이라 코드 구현만으로는 체크하지 않는다. 초기화 스크립트(9.1)는 코드 완료·정적 검증됐으나(아래), dryRun/`--execute` **실행**과 in-memory·리포트·실명 확인은 live Redis/orchestrator + backfill 완료 이후 운영자가 수행한다.
+
+---
+
+## 구현 현황 (Story 9.1 구현 시점 — forward-only)
+
+- **Story 9.1 코드 완료.** `src/scripts/reset-report-store.ts` 신규. `export-to-backend.ts` 일회성 스크립트 패턴 준수(dotenv, `initRedis`/`getRedisClient`/`closeRedis`, dryRun 기본 + `--execute`, `requireEnv`, `void main()` + finally `closeRedis`).
+  - 삭제: `thread:*`·`messages:*`·`report:job:*`·`report:cache:*`(SCAN scanIterator, dedupe) + `threads:list`·`orchestrator:agents`(단일 Set 키, `exists`/`sCard` 카운트). `del` 500개 배치.
+  - 보존: `emb:msg:*` 미삭제 + 삭제 대상에 `emb:` 혼입 시 중단 가드. `REDIS_URL` 필수(오삭제 방지) + password 마스킹 로그.
+- **정적 검증 완료 / 런타임 미검증 구분(정직 기록):**
+  - ✅ `tsc --noEmit` green(baseline 대비 무회귀). redis 4.7.1 타입 정의 대비 `scanIterator`(AsyncIterable<string>)·`del(string[])→number`·`exists`·`sCard` 호출 시그니처 by-construction 검증.
+  - ✅ password 마스킹 정규식 단위 검증(auth 유/무·`rediss://`·IP 케이스, host:port 오탐 없음).
+  - ⚠ **live Redis 대상 실행(dryRun/`--execute`)은 미실행** — 구현 환경에 Redis 부재(redis-server 미설치 + docker 데몬 정지 + 6379/6380 미기동). 실제 초기화는 운영자가 header 주석 순서대로 수행하는 **파괴적 one-off**라 여기서 실행하지 않는 것이 맞다.
+- **`package.json` 엔트리 미추가(의도적):** 선례 `export-to-backend.ts`도 npm script 없이 `npx ts-node`로 실행하며, 본 파일의 "수정 파일" 라벨에도 "옵션"으로 표기됨. 일관성을 위해 미추가. 실행은 `REDIS_URL=... npx ts-node src/scripts/reset-report-store.ts [--execute]`.
+- **Story 9.2 전체 런타임 미검증** — 위 Story 9.2 blockquote 참조.
