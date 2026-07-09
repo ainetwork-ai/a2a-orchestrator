@@ -81,7 +81,7 @@ ainspace 프론트가 shared backend 와 왕복한 뒤, **그 턴(user 메시지
 
 ### 주의사항
 - report 날짜 필터가 `message.timestamp`(epoch ms) 기준이므로, 프론트가 보낸 실제 timestamp 를 그대로 저장한다(재작성 금지).
-- `replyTo` 는 DAG 부모 링크. user 턴은 보통 없음, agent 응답은 직전 user 메시지 id 를 가리키게 프론트가 채울 수 있음(없어도 report 는 무관 — report 는 flat list + speaker 만 봄).
+- `replyTo` 는 DAG 부모 링크. EPIC21 은 이걸 **안 채운다**(user/agent 모두 replyTo 없이 옴). report 는 `getAllMessages()` flat list + speaker 만 보므로 무관하나, **확인점(F4)**: `messageDAG.addMessage` + `getAllMessages` 가 replyTo 없는 노드도 전량 보관·반환하는지(DAG main-history 재구성 로직이 orphan 을 누락시키지 않는지) 구현 시 검증. 누락되면 report 에서 메시지가 새어나감.
 
 ---
 
@@ -141,8 +141,9 @@ ainspace 프론트가 턴을 POST 할 엔드포인트. live 라우트엔 인증�
       id: string;                 // = backend conversationId (ainspace 소유 안정적 id, = orchestrator thread id)
       name?: string;
       userId: string;             // ✅ backend user id (= backend users.id, ainspace 가 auth용으로 보관 중) — 필수
-      agents: Array<{ name: string; a2aUrl: string;   // ✅ a2aUrl 필수 (report 필터)
-                      backendAgentId?: string;         // agent 의 backend users.id (correlation) — 권장
+      agents: Array<{ name: string;                    // ✅ 필수 (thread 내 유니크, speaker join 키)
+                      a2aUrl?: string;                 // 권장 (report agentUrls 필터용; 없으면 그 agent만 덜 정밀, hard-fail 아님)
+                      backendAgentId?: string;         // agent 의 backend users.id (correlation) — 권장 (SSE 로 안정적 가용)
                       role?: string; color?: string }>
     },
     messages: Array<{
@@ -158,17 +159,18 @@ ainspace 프론트가 턴을 POST 할 엔드포인트. live 라우트엔 인증�
   (사람 턴의 backend id 는 thread.userId, agent 턴의 backend id 는 speaker→thread.agents[].backendAgentId 로 복원되므로 message 에 별도 backend id 필드는 두지 않음.)
 - [ ] 처리: `getOrCreateThread(thread)` → 각 message 를 시간순 정렬 후 `world.ingestMessage(m)`. 응답 `{ ok: true, threadId, ingested: N, skipped: M }`.
 - [ ] 검증(**identity fidelity 포함**):
-  - `thread.id` 필수(= backend conversationId), `thread.userId` **필수**(backend user id — 빈 값 400), `thread.agents[].a2aUrl` **필수**(canonical). `backendAgentId` 는 있으면 보존.
+  - `thread.id` 필수(= backend conversationId), `thread.userId` **필수**(backend user id — 빈 값 400), `thread.agents[].name` **필수**. `a2aUrl`/`backendAgentId` 는 있으면 보존(없어도 400 아님 — F1).
   - `messages[].{id,speaker,content,timestamp}` 필수, `timestamp` 숫자(ms).
-  - speaker 는 `"User"` 또는 `thread.agents[].name` 중 하나(불일치 400 — 필터/`isUser` 정합).
-  - **thread.agents 의 display name 은 thread 내 유일**해야 함(중복 400) — 그래야 `speaker(name) → a2aUrl` 매핑이 모호하지 않음. agent 턴 메시지는 `senderA2aUrl` 을 채우도록 권장(이름 충돌 완전 차단).
+  - speaker 는 `"User"` 또는 `thread.agents[].name` 중 하나(불일치 400 — 필터/`isUser` 정합). **agent 는 name 으로 join** — a2aUrl 부재해도 name 으로 식별.
+  - **thread.agents 의 display name 은 thread 내 유일**해야 함(중복 400) — `speaker(name) → agent` 매핑 모호성 제거. agent 턴 메시지는 `senderA2aUrl`/agents[].backendAgentId 로 backend 상호참조 보강.
 - [ ] **멱등**: 같은 message id 재-POST 는 skip 카운트로. 배치 재전송 안전.
 - [ ] `server.ts` 에 `/api/ingest` mount.
 
 ### 주의사항
 - speaker 계약: 사람=정확히 `"User"`, agent=agent display name(=`thread.agents[].name`). 이게 안 맞으면 report 의 `isUser` 파생과 agentNames 필터가 어긋난다.
-- 배치 크기: 한 턴(user+agent 1~N)이 일반적. 대량 backfill 도 같은 엔드포인트로 가능하나 body 한계 고려(필요 시 프론트가 분할).
-- provenance: 이 엔드포인트를 **ainspace 프론트만** 호출한다는 것이 "orchestrator=ainspace 대화" 불변의 근간. 토큰을 ainspace 프론트(BFF)에만 배포한다.
+- **증분/부분 POST 지원 (F3)**: ainspace 는 send/SSE 분리로 **user 턴과 agent 턴을 별도 POST** 로 보낸다(한 번에 완결된 턴 아님). `getOrCreateThread` upsert + 메시지별 멱등 덕에 1개짜리 POST·순서 뒤섞임·부분 도착 모두 안전 — 첫 POST 가 thread 를 만들고 이후 POST 가 append. 계약이 "완결 턴"을 요구하지 않는다.
+- 배치 크기: 대량 backfill 도 같은 엔드포인트로 가능하나 body 한계 고려(필요 시 프론트가 분할).
+- provenance: 이 엔드포인트를 **ainspace 프론트만** 호출한다는 것이 "orchestrator=ainspace 대화" 불변의 근간. 토큰을 ainspace 프론트(BFF)에만 배포한다. **1a(ainspace 턴만) 게이트는 ainspace 측(EPIC21)에 있고 orchestrator 는 재검증하지 않는다** — orchestrator 는 받은 것을 신뢰하므로, EPIC21 의 SSE fan-in 게이트 정확성이 privacy 의 lynchpin.
 
 ---
 
