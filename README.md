@@ -251,6 +251,11 @@ GET    /api/threads/:id/stream   # SSE stream for thread updates
 POST   /api/agents/import        # Import agent from A2A endpoint
 ```
 
+### Conversation Ingest (ainspace dual-write — EPIC8)
+```
+POST   /api/ingest/conversation  # Ingest already-completed turns (Bearer INGEST_TOKEN)
+```
+
 ### Report Generation
 ```
 POST   /api/reports              # Create report job
@@ -287,6 +292,71 @@ curl "http://localhost:3006/api/reports/{jobId}?format=full"
 ```bash
 curl "http://localhost:3006/api/reports?page=1&limit=20&tags=weekly&status=completed"
 ```
+
+## Conversation Ingest (ainspace dual-write — EPIC8)
+
+The ainspace frontend posts already-completed conversation turns (user message + agent
+responses) here after they round-trip the shared backend. Ingest flows through
+ThreadManager/World, so both the in-memory World (which the report pipeline reads) and
+Redis are updated — the ingested conversation is visible to a **running** server with no
+restart, and no agents are triggered. This is the write path that revives the EPIC1–7
+report pipeline on top of live ainspace conversations. The body below is the inter-repo
+contract frozen with ainspace EPIC17.
+
+**Auth:** `Authorization: Bearer <INGEST_TOKEN>`. If `INGEST_TOKEN` is unset the endpoint
+is **disabled (503)** — fail closed. Distribute the token only to the ainspace frontend/BFF;
+"only ainspace calls this endpoint" is the basis of the "orchestrator = ainspace
+conversations" provenance invariant.
+
+**Request** — `POST /api/ingest/conversation`:
+```jsonc
+{
+  "thread": {
+    "id": "conv_123",           // = backend conversationId (== orchestrator thread id)
+    "name": "optional",
+    "userId": "user_abc",       // REQUIRED = backend users.id
+    "agents": [
+      { "name": "Researcher",   // REQUIRED, unique within thread (speaker join key)
+        "a2aUrl": "https://agent.example/a2a",  // recommended (report agentUrls filter)
+        "backendAgentId": "agent_users_id",     // recommended (correlation)
+        "role": "analyst", "color": "bg-gray-100 border-gray-400" }
+    ]
+  },
+  "messages": [
+    { "id": "m1", "speaker": "User",       "content": "…", "timestamp": 1720500000000 },
+    { "id": "m2", "speaker": "Researcher", "content": "…", "timestamp": 1720500005000,
+      "senderA2aUrl": "https://agent.example/a2a", "status": "accepted" }
+  ]
+}
+```
+- `speaker` must be exactly `"User"` or one of `thread.agents[].name`.
+- `timestamp` is epoch **ms** (the report date filter reads it verbatim).
+- `a2aUrl` / `backendAgentId` / `senderA2aUrl` / `replyTo` / `status` are optional.
+
+**Response:** `{ "ok": true, "threadId": "conv_123", "ingested": 2, "skipped": 0 }`
+
+**Idempotent + incremental:** re-POSTing a message id is skipped (counted in `skipped`),
+and the user turn and agent turns may arrive in **separate** posts — the first post upserts
+the thread, later posts append.
+
+```bash
+curl -X POST http://localhost:3002/api/ingest/conversation \
+  -H "Authorization: Bearer $INGEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"thread":{"id":"conv_123","userId":"user_abc","agents":[{"name":"Researcher"}]},
+       "messages":[{"id":"m1","speaker":"User","content":"hello","timestamp":1720500000000}]}'
+```
+
+### Reviving the service + end-to-end check
+
+1. Set `REDIS_URL`, `LLM_API_URL`, `LLM_MODEL`, `INGEST_TOKEN`, and the embedding keys
+   (`OPENAI_API_KEY` or the Azure `AZURE_OPENAI_EMBEDDING_*` set), then `npm run dev`
+   (or `npm run build && npm start`). Confirm `GET /api/health` returns 200.
+2. Ingest a turn or two with the `curl` above; confirm via
+   `GET /api/threads/<id>/messages`.
+3. Generate a report over that thread: `POST /api/reports` with
+   `{ "threadIds": ["conv_123"] }`, then poll `GET /api/reports/<jobId>` until completed.
+4. Re-POST the same batch and confirm `skipped` increases with no duplicates.
 
 ## T3C Report Format
 

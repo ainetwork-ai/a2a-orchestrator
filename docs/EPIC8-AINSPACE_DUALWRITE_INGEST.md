@@ -70,14 +70,14 @@ ainspace 프론트가 shared backend 와 왕복한 뒤, **그 턴(user 메시지
 ### 태스크
 
 #### `Message` 에 sender identity(optional) 추가
-- [ ] `src/types/index.ts` `Message` 에 **optional** `senderA2aUrl?: string` 추가(agent 턴의 canonical 식별자). 사람 턴은 `speaker:"User"` + thread.userId 로 식별되므로 불필요. optional 이라 기존 DAG/파이프라인 하위호환(report 는 이 필드 안 읽음 — 식별 fidelity 보존용).
+- [x] `src/types/index.ts` `Message` 에 **optional** `senderA2aUrl?: string` 추가(agent 턴의 canonical 식별자). 사람 턴은 `speaker:"User"` + thread.userId 로 식별되므로 불필요. optional 이라 기존 DAG/파이프라인 하위호환(report 는 이 필드 안 읽음 — 식별 fidelity 보존용).
 
 #### `ingestMessage` 추가
-- [ ] `World.ingestMessage(msg: { id: string; speaker: string; content: string; timestamp: number; replyTo?: string; status?: "accepted" | "dropped"; senderA2aUrl?: string }): { ingested: boolean }` 추가.
-- [ ] 이미 존재하는 id(`messageDAG` 에 있음)면 **skip**(멱등) → `{ ingested: false }`. 아니면 `messageDAG.addMessage(msg)` 후 `saveMessagesToRedis()` → `{ ingested: true }`.
-- [ ] **agent 처리 트리거 금지** — `broadcastToAgents`/`processAgentResponsesQueue` 호출하지 않는다.
-- [ ] `status` 미지정 시 `"accepted"` 기본(DAG main-history 재구성 정합).
-- [ ] `messageIdCounter` 는 ingest 가 자체 id 를 쓰므로 건드리지 않되, wrapper 저장 시 기존 값 보존.
+- [x] `World.ingestMessage(msg: { id: string; speaker: string; content: string; timestamp: number; replyTo?: string; status?: "accepted" | "dropped"; senderA2aUrl?: string }): { ingested: boolean }` 추가.
+- [x] 이미 존재하는 id(`messageDAG` 에 있음)면 **skip**(멱등) → `{ ingested: false }`. 아니면 `messageDAG.addMessage(msg)` 후 `saveMessagesToRedis()` → `{ ingested: true }`.
+- [x] **agent 처리 트리거 금지** — `broadcastToAgents`/`processAgentResponsesQueue` 호출하지 않는다.
+- [x] `status` 미지정 시 `"accepted"` 기본(DAG main-history 재구성 정합).
+- [x] `messageIdCounter` 는 ingest 가 자체 id 를 쓰므로 건드리지 않되, wrapper 저장 시 기존 값 보존.
 
 ### 주의사항
 - report 날짜 필터가 `message.timestamp`(epoch ms) 기준이므로, 프론트가 보낸 실제 timestamp 를 그대로 저장한다(재작성 금지).
@@ -101,13 +101,13 @@ ingest 대상 thread 가 없으면 만들고, 있으면 재사용해야 한다(�
 ### 태스크
 
 #### `AgentPersona` 에 backend id(optional) 추가
-- [ ] `src/types/index.ts` `AgentPersona` 에 optional `backendAgentId?: string`(agent 의 shared backend `users.id`) 추가. a2aUrl(A2A 프로토콜 식별자, report 필터가 사용)은 유지하고 backend row id 를 **함께** 보존. optional 이라 하위호환.
+- [x] `src/types/index.ts` `AgentPersona` 에 optional `backendAgentId?: string`(agent 의 shared backend `users.id`) 추가. a2aUrl(A2A 프로토콜 식별자, report 필터가 사용)은 유지하고 backend row id 를 **함께** 보존. optional 이라 하위호환.
 
 #### `getOrCreateThread` 추가
-- [ ] `ThreadManager.getOrCreateThread(input: { id: string; name?: string; userId: string; agents: Array<{ name: string; a2aUrl: string; backendAgentId?: string; role?: string; color?: string }> }): World` 추가. `id` = backend conversationId, `userId` = **backend user id**(필수).
-- [ ] `id` 로 in-memory Map 조회 → 있으면 그 `World` 반환(단 신규 agent 는 병합), 없으면 **주어진 id 그대로** Thread 생성(uuid 재발급 금지 — 프론트가 준 id 가 곧 thread id)·`userId` 저장·`World` 구성·in-memory Map 등록·`saveThreadToRedis`.
-- [ ] agent 병합: `a2aUrl` 로 dedup, 신규만 `thread.agents` 에 추가(`backendAgentId` 보존, `role` 기본 `""`, `color` 기본값). 변경 시 `saveThreadToRedis` + `agentService.registerAgents(agents)`.
-- [ ] `createdAt`/`updatedAt` 은 최초 생성 시 `Date.now()`(report 미사용이라 값 자체는 무관하나 스키마 충족).
+- [x] `ThreadManager.getOrCreateThread(input: { id: string; name?: string; userId: string; agents: Array<{ name: string; a2aUrl: string; backendAgentId?: string; role?: string; color?: string }> }): World` 추가. `id` = backend conversationId, `userId` = **backend user id**(필수). (구현: `agents[].a2aUrl` 은 wire 계약 F1 정합을 위해 optional 로 완화 — `IngestAgentInput`, 없으면 `""` 기본.)
+- [x] `id` 로 in-memory Map 조회 → 있으면 그 `World` 반환(단 신규 agent 는 병합), 없으면 **주어진 id 그대로** Thread 생성(uuid 재발급 금지 — 프론트가 준 id 가 곧 thread id)·`userId` 저장·`World` 구성·in-memory Map 등록·`saveThreadToRedis`.
+- [x] agent 병합: `a2aUrl` 로 dedup(없으면 unique `name` fallback — 빈 문자열 충돌 회피), 신규만 `thread.agents` 에 추가(`backendAgentId` 보존, `role` 기본 `""`, `color` 기본값). 변경 시 `saveThreadToRedis` + `agentService.registerAgents(agents)`.
+- [x] `createdAt`/`updatedAt` 은 최초 생성 시 `Date.now()`(report 미사용이라 값 자체는 무관하나 스키마 충족).
 
 ### 주의사항
 - `id` 는 **ainspace 프론트가 소유한 안정적 대화 id**(shared backend conversationId 등)를 쓴다. 이 매핑(backend conversationId ↔ orchestrator threadId)은 프론트/ainspace 측 상태이며 shared backend 에는 저장하지 않는다.
@@ -130,8 +130,8 @@ ainspace 프론트가 턴을 POST 할 엔드포인트. live 라우트엔 인증�
 ### 태스크
 
 #### 인증 미들웨어
-- [ ] `ingestAuth.ts`: `Authorization: Bearer <INGEST_TOKEN>` 검사, 불일치 시 401. `INGEST_TOKEN` 미설정이면 부팅 시 경고 + 엔드포인트 비활성(503) — 실수로 무인증 쓰기 방지.
-- [ ] `.env.example` 에 `INGEST_TOKEN` 추가.
+- [x] `ingestAuth.ts`: `Authorization: Bearer <INGEST_TOKEN>` 검사, 불일치 시 401. `INGEST_TOKEN` 미설정이면 부팅 시 경고 + 엔드포인트 비활성(503) — 실수로 무인증 쓰기 방지. (구현: `crypto.timingSafeEqual` 상수시간 비교, 부팅 경고는 `server.ts initialize()`.)
+- [x] `.env.example` 에 `INGEST_TOKEN` 추가. (`.env.dev.example`/`.env.prod.example` 에도 함께 추가.)
 
 #### Ingest 라우트
 - [ ] `POST /api/ingest/conversation` (미들웨어 게이트). Body (== **ainspace EPIC17 이 구현할 inter-repo 계약**):
@@ -157,14 +157,14 @@ ainspace 프론트가 턴을 POST 할 엔드포인트. live 라우트엔 인증�
   }
   ```
   (사람 턴의 backend id 는 thread.userId, agent 턴의 backend id 는 speaker→thread.agents[].backendAgentId 로 복원되므로 message 에 별도 backend id 필드는 두지 않음.)
-- [ ] 처리: `getOrCreateThread(thread)` → 각 message 를 시간순 정렬 후 `world.ingestMessage(m)`. 응답 `{ ok: true, threadId, ingested: N, skipped: M }`.
-- [ ] 검증(**identity fidelity 포함**):
+- [x] 처리: `getOrCreateThread(thread)` → 각 message 를 시간순 정렬 후 `world.ingestMessage(m)`. 응답 `{ ok: true, threadId, ingested: N, skipped: M }`.
+- [x] 검증(**identity fidelity 포함**):
   - `thread.id` 필수(= backend conversationId), `thread.userId` **필수**(backend user id — 빈 값 400), `thread.agents[].name` **필수**. `a2aUrl`/`backendAgentId` 는 있으면 보존(없어도 400 아님 — F1).
   - `messages[].{id,speaker,content,timestamp}` 필수, `timestamp` 숫자(ms).
   - speaker 는 `"User"` 또는 `thread.agents[].name` 중 하나(불일치 400 — 필터/`isUser` 정합). **agent 는 name 으로 join** — a2aUrl 부재해도 name 으로 식별.
   - **thread.agents 의 display name 은 thread 내 유일**해야 함(중복 400) — `speaker(name) → agent` 매핑 모호성 제거. agent 턴 메시지는 `senderA2aUrl`/agents[].backendAgentId 로 backend 상호참조 보강.
-- [ ] **멱등**: 같은 message id 재-POST 는 skip 카운트로. 배치 재전송 안전.
-- [ ] `server.ts` 에 `/api/ingest` mount.
+- [x] **멱등**: 같은 message id 재-POST 는 skip 카운트로. 배치 재전송 안전.
+- [x] `server.ts` 에 `/api/ingest` mount.
 
 ### 주의사항
 - speaker 계약: 사람=정확히 `"User"`, agent=agent display name(=`thread.agents[].name`). 이게 안 맞으면 report 의 `isUser` 파생과 agentNames 필터가 어긋난다.
@@ -189,7 +189,7 @@ orchestrator 를 다시 기동하고, ingest→report 경로가 실제로 동작
 - [ ] ingest 스모크: `POST /api/ingest/conversation` 로 1 human ↔ 1 agent 턴 2~3개 적재 → `GET /api/threads/:id/messages`(또는 report 입력)로 보이는지 확인.
 - [ ] report 스모크: `POST /api/reports` (해당 thread scope) → `GET /api/reports/:jobId` 완료 시 그 대화가 topic/claim 으로 반영되는지 확인.
 - [ ] 재-POST 멱등 확인: 같은 배치 재전송 시 `skipped` 증가, 중복 미생성.
-- [ ] `README.md` 에 ingest 계약 + 실행 방법 1문단 기록.
+- [x] `README.md` 에 ingest 계약 + 실행 방법 1문단 기록.
 
 ### 주의사항
 - 임베딩은 OpenAI/Azure(원본) 그대로 — sovereignty waive 는 의식적 결정(의존성 절 참조). 배포 환경에 해당 키 필요.
@@ -209,11 +209,19 @@ orchestrator 를 다시 기동하고, ingest→report 경로가 실제로 동작
 - 무인증 ingest 금지(`INGEST_TOKEN` 없으면 엔드포인트 비활성).
 
 ## 완료 조건
-- [ ] `POST /api/ingest/conversation` 가 인증되며, ainspace 계약 body 를 받아 thread upsert + 메시지 적재(멱등)한다.
-- [ ] 적재된 대화가 **실행 중** orchestrator 의 report 파이프라인에 즉시 보인다(재시작 불필요 — in-memory 갱신 확인).
-- [ ] ingest 후 `POST /api/reports` 가 그 대화를 포함한 리포트를 생성한다.
-- [ ] 같은 배치 재-POST 시 중복 생성 없음(skipped 로 집계).
-- [ ] agent 처리는 ingest 중 한 번도 트리거되지 않는다.
-- [ ] **backend id 보존**: 적재된 thread 가 backend conversationId(=thread.id) + backend user id(=userId) + agent 의 a2aUrl·backendAgentId 를 보존한다 → backend 와 상호참조 가능. 동명 agent 가 있어도 귀속이 모호하지 않다(senderA2aUrl/backendAgentId).
-- [ ] shared backend 코드/DB 무변경(orchestrator 리포지토리 안에서만 완결).
-- [ ] (계약) ainspace EPIC17 이 이 body 스펙에 맞춰 dual-write 하면 end-to-end 동작.
+- [ ] `POST /api/ingest/conversation` 가 인증되며, ainspace 계약 body 를 받아 thread upsert + 메시지 적재(멱등)한다. *(코드 완료 + tsc green, 런타임 미검증 — Redis 필요)*
+- [ ] 적재된 대화가 **실행 중** orchestrator 의 report 파이프라인에 즉시 보인다(재시작 불필요 — in-memory 갱신 확인). *(런타임 미검증 — 구조상 보장: ingest 가 `ThreadManager`/`World` in-memory Map 을 직접 갱신하고 report 가 같은 `world.getHistory()` 를 읽음.)*
+- [ ] ingest 후 `POST /api/reports` 가 그 대화를 포함한 리포트를 생성한다. *(런타임 미검증 — Redis+LLM+임베딩 키 필요.)*
+- [ ] 같은 배치 재-POST 시 중복 생성 없음(skipped 로 집계). *(런타임 미검증 — 구조상 보장: `ingestMessage` 가 `messageDAG.getMessage(id)` 로 선-검사 후 skip.)*
+- [x] agent 처리는 ingest 중 한 번도 트리거되지 않는다. *(정적 보장: `ingestMessage` 는 `broadcastToAgents`/`processAgentResponsesQueue` 를 호출하지 않음 — 코드 인스펙션으로 확정.)*
+- [x] **backend id 보존**: 적재된 thread 가 backend conversationId(=thread.id) + backend user id(=userId) + agent 의 a2aUrl·backendAgentId 를 보존한다 → backend 와 상호참조 가능. 동명 agent 가 있어도 귀속이 모호하지 않다(senderA2aUrl/backendAgentId). *(정적 보장: `Thread.userId`·`AgentPersona.backendAgentId`·`Message.senderA2aUrl` 저장, thread.id 그대로 사용.)*
+- [x] shared backend 코드/DB 무변경(orchestrator 리포지토리 안에서만 완결). *(정적 보장: 본 EPIC 변경은 전부 orchestrator 레포 내부.)*
+- [ ] (계약) ainspace EPIC17 이 이 body 스펙에 맞춰 dual-write 하면 end-to-end 동작. *(cross-repo — ainspace 측 구현 의존.)*
+
+## 구현 상태 (검증 수준 기록 — EPIC34 선례 준수)
+
+정적 검증(완료): 타입/미들웨어/라우트/manager 구현 + `npx tsc --noEmit` 0 errors. Story 8.1~8.3 코드 태스크 + 8.4 README 완료.
+
+F4 확인(정적, 수정 불필요): report 파이프라인은 `world.getHistory()` → `messageDAG.getAllMessages()`(=`Array.from(messages.values())`, `conversationParser.ts:50,100`)로 읽는다. 이는 **replyTo 유무와 무관하게 Map 의 전 메시지를 반환**하므로 ainspace 가 replyTo 를 안 채워도 누락되지 않는다. orphan 을 떨어뜨릴 수 있는 부모-링크 순회는 `getMainHistory()` 에만 있고 이는 **report 경로가 아니다**(live orchestration 전용). ⇒ DAG 재구성 수정 불필요.
+
+런타임 미검증(인프라 필요 — Redis + LLM + 임베딩 키): 서비스 기동/`/api/health`, ingest 스모크, report 스모크, 재-POST 멱등 관측. 실행 절차는 `README.md` "Conversation Ingest (ainspace dual-write — EPIC8)" 섹션 참조. faking 하지 않고 절차만 문서화.
