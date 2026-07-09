@@ -5,6 +5,7 @@ import chatRouter from "./routes/chat";
 import threadsRouter from "./routes/threads";
 import agentsRouter from "./routes/agents";
 import reportsRouter from "./routes/reports";
+import ingestRouter from "./routes/ingest";
 import ThreadManager from "./world/threadManager";
 import ReportService from "./services/reportService";
 import { initRedis } from "./utils/redis";
@@ -36,6 +37,14 @@ async function initialize() {
   // Load existing threads from Redis
   const threadManager = ThreadManager.getInstance();
   await threadManager.loadThreadsFromRedis();
+
+  // EPIC8: the ingest endpoint fails closed when its shared secret is absent.
+  if (!process.env.INGEST_TOKEN) {
+    console.warn(
+      "⚠️  INGEST_TOKEN not set — POST /api/ingest/conversation is DISABLED (503). " +
+        "Set INGEST_TOKEN to enable ainspace dual-write ingest."
+    );
+  }
 }
 
 const app = express();
@@ -77,6 +86,7 @@ app.use("/api/chat", chatRouter);
 app.use("/api/threads", threadsRouter);
 app.use("/api/agents", agentsRouter);
 app.use("/api/reports", reportsRouter);
+app.use("/api/ingest", ingestRouter);
 
 // Error handling middleware
 app.use(
@@ -106,6 +116,7 @@ initialize().then(() => {
     console.log(`   - POST   http://localhost:${PORT}/api/agents/import`);
     console.log(`   - POST   http://localhost:${PORT}/api/reports`);
     console.log(`   - GET    http://localhost:${PORT}/api/reports/:jobId`);
+    console.log(`   - POST   http://localhost:${PORT}/api/ingest/conversation`);
     console.log(`   - GET    http://localhost:${PORT}/api/health`);
     console.log(`\n🌍 Allowed origins: ${allowedOrigins.join(", ")}\n`);
   });

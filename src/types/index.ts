@@ -5,6 +5,11 @@ export interface Message {
   timestamp: number;
   replyTo?: string;
   status?: "accepted" | "dropped";
+  // EPIC8: canonical sender identity for an agent turn ingested from ainspace
+  // dual-write. A human turn is identified by speaker === "User" + thread.userId,
+  // so it is left unset. Optional → backward-compatible with existing DAG/Redis
+  // payloads; the report pipeline does not read it (identity fidelity only).
+  senderA2aUrl?: string;
 }
 
 export interface AgentPersona {
@@ -12,6 +17,10 @@ export interface AgentPersona {
   role: string;
   a2aUrl: string;
   color: string;
+  // EPIC8: the agent's shared-backend users.id, preserved alongside a2aUrl (the
+  // A2A protocol identifier the report filter uses) so orchestrator records can
+  // be cross-referenced with the backend. Optional → backward-compatible.
+  backendAgentId?: string;
 }
 
 export interface Thread {

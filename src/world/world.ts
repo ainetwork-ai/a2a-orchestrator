@@ -315,6 +315,54 @@ Respond in JSON format only:
   }
 
   /**
+   * Ingest a pre-authored message (EPIC8 — ainspace dual-write).
+   *
+   * The turn already happened in the shared backend, so we append it verbatim
+   * (caller-supplied id / speaker / content / timestamp) to the in-memory DAG
+   * and Redis so the report pipeline (which reads the in-memory World) sees it
+   * immediately — no restart needed.
+   *
+   * MUST NOT trigger agents: unlike addUserMessage, this does not call
+   * broadcastToAgents / processAgentResponsesQueue. The conversation is done.
+   *
+   * Idempotent: a message id already present in the DAG is skipped, so batch
+   * re-POSTs and partial/out-of-order posts (F3) are safe.
+   */
+  ingestMessage(msg: {
+    id: string;
+    speaker: string;
+    content: string;
+    timestamp: number;
+    replyTo?: string;
+    status?: "accepted" | "dropped";
+    senderA2aUrl?: string;
+  }): { ingested: boolean } {
+    // Idempotency: skip if this id is already in the DAG.
+    if (this.messageDAG.getMessage(msg.id)) {
+      return { ingested: false };
+    }
+
+    const message: Message = {
+      id: msg.id,
+      speaker: msg.speaker,
+      content: msg.content,
+      timestamp: msg.timestamp,
+      // Default to "accepted" so DAG main-history reconstruction stays consistent.
+      status: msg.status ?? "accepted",
+    };
+    if (msg.replyTo) message.replyTo = msg.replyTo;
+    if (msg.senderA2aUrl) message.senderA2aUrl = msg.senderA2aUrl;
+
+    this.messageDAG.addMessage(message);
+
+    // Persist. Ingest uses caller-supplied ids, so messageIdCounter is left
+    // untouched here; saveMessagesToRedis preserves its existing value.
+    this.saveMessagesToRedis(this.threadId);
+
+    return { ingested: true };
+  }
+
+  /**
    * Broadcast user message to relevant agents (parallel responses)
    * Uses LLM to select agents mentioned or related to the message
    * Falls back to random selection (1-4 agents) if no relevant agents found
