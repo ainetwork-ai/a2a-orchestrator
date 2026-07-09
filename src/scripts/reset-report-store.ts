@@ -113,10 +113,10 @@ async function main(): Promise<void> {
     "⚠ orchestrator 가 **정지**된 상태여야 합니다. 실행 후 재기동 → (EPIC35) backfill 순서.",
   );
 
-  await initRedis();
-  const redis = getRedisClient();
-
   try {
+    await initRedis();
+    const redis = getRedisClient();
+
     // ---- 1. 삭제 대상 수집 ----
     const groups: KeyGroup[] = [];
 
@@ -186,7 +186,13 @@ async function main(): Promise<void> {
     console.error("✖ 초기화 중단:", err);
     process.exitCode = 1;
   } finally {
-    await closeRedis();
+    // initRedis 실패 시 client 가 없거나 미연결 상태라 closeRedis(quit) 가 되레 throw 할 수
+    // 있다. void main 이라 그 throw 가 unhandled rejection 으로 새므로 여기서 삼킨다.
+    try {
+      await closeRedis();
+    } catch (closeErr) {
+      console.error("✖ Redis 종료 실패(무시):", closeErr);
+    }
   }
 }
 
