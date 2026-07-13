@@ -35,6 +35,47 @@ const VALID_STANCES = new Set<ExtractedOpinion["stance"]>([
 ]);
 
 /**
+ * LLM이 돌려준 speaker 를 이 세그먼트/스레드의 **실제 화자**로 검증한다.
+ *
+ * speaker 는 LLM 출력 필드 중 유일하게 검증이 없었다(stance 는 VALID_STANCES,
+ * keyMessageIds 는 messageIdSet 필터로 검증). 그 탓에 LLM 이 대화 *내용*에 등장한
+ * 호칭(예: 다른 에이전트를 "주작 언니"라 부른 본문)을 화자로 환각하면 그대로
+ * Claim.speaker 로 새어 나갔다.
+ *
+ * 정책: LLM 값이 실제 화자면 그대로 채택(누가 핵심을 말했는지에 대한 LLM 의 판단 존중),
+ * 아니면 keyMessage 들의 실제 화자 중 최빈값으로 폴백(구조적·결정적, 동점이면 먼저 등장한
+ * 화자). 신호가 전혀 없으면 "User". human 은 프롬프트에서 이미 "User"로 익명화되므로
+ * 실명이 speaker 로 나오지 않는다.
+ */
+export function resolveSpeaker(
+  llmSpeaker: string | undefined,
+  messages: SegmentMessage[],
+  keyMessageIds: string[]
+): string {
+  const speakerById = new Map(
+    messages.map((m) => [m.id, m.isUser ? "User" : m.speaker] as const)
+  );
+  const validSpeakers = new Set(speakerById.values());
+
+  if (llmSpeaker && validSpeakers.has(llmSpeaker)) return llmSpeaker;
+
+  const counts = new Map<string, number>();
+  for (const id of keyMessageIds) {
+    const sp = speakerById.get(id);
+    if (sp) counts.set(sp, (counts.get(sp) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [sp, n] of counts) {
+    if (n > bestCount) {
+      best = sp;
+      bestCount = n;
+    }
+  }
+  return best ?? "User";
+}
+
+/**
  * Extract opinions from conversation segments using LLM
  */
 export async function extractOpinions(
@@ -197,21 +238,24 @@ async function extractFromThread(
 
     const opinions: ExtractedOpinion[] = (parsed.topics || [])
       .filter((t) => t.statement && t.statement.trim().length > 0)
-      .map((t) => ({
-        id: uuidv4(),
-        speaker: t.speaker || "User",
-        statement: t.statement!.trim(),
-        stance: (VALID_STANCES.has(t.stance as ExtractedOpinion["stance"]) ? t.stance : "neutral") as ExtractedOpinion["stance"],
-        confidence: Math.max(0, Math.min(1, t.confidence ?? 0.5)),
-        evolved: t.evolved ?? false,
-        quote: t.quote?.trim() || undefined,
-        source: {
-          segmentId: `thread-${threadId}`,
-          keyMessageIds: (t.keyMessageIds || []).filter((id) => messageIdSet.has(id)),
-        },
-        timestamp: lastTimestamp,
-        threadId,
-      }));
+      .map((t) => {
+        const keyMessageIds = (t.keyMessageIds || []).filter((id) => messageIdSet.has(id));
+        return {
+          id: uuidv4(),
+          speaker: resolveSpeaker(t.speaker, messages, keyMessageIds),
+          statement: t.statement!.trim(),
+          stance: (VALID_STANCES.has(t.stance as ExtractedOpinion["stance"]) ? t.stance : "neutral") as ExtractedOpinion["stance"],
+          confidence: Math.max(0, Math.min(1, t.confidence ?? 0.5)),
+          evolved: t.evolved ?? false,
+          quote: t.quote?.trim() || undefined,
+          source: {
+            segmentId: `thread-${threadId}`,
+            keyMessageIds,
+          },
+          timestamp: lastTimestamp,
+          threadId,
+        };
+      });
 
     return { opinions, failed: false };
   } catch (error) {
@@ -344,21 +388,24 @@ async function extractFromSegment(
     const opinions = (parsed.opinions || [])
       .filter((op) => op.statement && op.statement.trim().length > 0)
       .slice(0, 1)
-      .map((op) => ({
-        id: uuidv4(),
-        speaker: op.speaker || "User",
-        statement: op.statement!.trim(),
-        stance: (VALID_STANCES.has(op.stance as ExtractedOpinion["stance"]) ? op.stance : "neutral") as ExtractedOpinion["stance"],
-        confidence: Math.max(0, Math.min(1, op.confidence ?? 0.5)),
-        evolved: op.evolved ?? false,
-        quote: op.quote?.trim() || undefined,
-        source: {
-          segmentId: segment.id,
-          keyMessageIds: (op.keyMessageIds || []).filter((id) => messageIdSet.has(id)),
-        },
-        timestamp: segment.endTimestamp,
-        threadId: segment.threadId,
-      }));
+      .map((op) => {
+        const keyMessageIds = (op.keyMessageIds || []).filter((id) => messageIdSet.has(id));
+        return {
+          id: uuidv4(),
+          speaker: resolveSpeaker(op.speaker, segment.messages, keyMessageIds),
+          statement: op.statement!.trim(),
+          stance: (VALID_STANCES.has(op.stance as ExtractedOpinion["stance"]) ? op.stance : "neutral") as ExtractedOpinion["stance"],
+          confidence: Math.max(0, Math.min(1, op.confidence ?? 0.5)),
+          evolved: op.evolved ?? false,
+          quote: op.quote?.trim() || undefined,
+          source: {
+            segmentId: segment.id,
+            keyMessageIds,
+          },
+          timestamp: segment.endTimestamp,
+          threadId: segment.threadId,
+        };
+      });
 
     return { opinions, failed: false };
   } catch (error) {
