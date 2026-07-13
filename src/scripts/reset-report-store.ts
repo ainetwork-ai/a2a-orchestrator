@@ -10,13 +10,16 @@
 //    채우고, report 는 그 in-memory 를 읽는다. 실행 중에 Redis 를 지우면 in-memory 와
 //    Redis 가 어긋나(desync) report 가 유령 데이터를 읽는다.
 //
-// 실행 순서 (EPIC35 와 맞물림):
-//    1. dual-write ON (시각 T)
-//    2. orchestrator **정지**
-//    3. 이 스크립트 실행  ← 여기
-//    4. orchestrator **재기동** (빈 in-memory)
+// 실행 순서 (EPIC35 와 맞물림) — 초기화가 dual-write ON 보다 **먼저**:
+//    1. orchestrator **정지**
+//    2. 이 스크립트 실행 (초기화)  ← 여기
+//    3. orchestrator **재기동** (빈 in-memory)
+//    4. dual-write ON (시각 T)  ← 초기화 뒤라야 [T, 초기화] 사이 dual-write 턴이 안 지워짐
 //    5. (EPIC35) backfill 실행 (createdAt < T, backend id 기준)
 //    6. (EPIC9 Story 9.2) report new-shape 검증
+//
+// (forward-only 교정 2026-07: 구 순서는 "dual-write ON → 정지 → 초기화"였으나,
+//  초기화가 [T, 초기화] 사이 dual-write 턴을 지워 유실 → 초기화를 앞으로 옮김.)
 //
 // 삭제 키군: thread:*, threads:list, messages:*, orchestrator:agents,
 //            report:job:*, report:cache:*

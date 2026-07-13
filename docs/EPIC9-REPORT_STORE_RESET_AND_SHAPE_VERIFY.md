@@ -54,7 +54,7 @@ backfill 직전 1회, orchestrator 정지 상태에서 대화·리포트 Redis �
 - [x] `src/scripts/reset-report-store.ts`: `initRedis` 후 `SCAN`(scanIterator)으로 다음 삭제 — `thread:*`, `threads:list`, `messages:*`, `orchestrator:agents`, `report:job:*`, `report:cache:*`.
 - [x] **`emb:msg:*` 는 삭제하지 않는다**(임베딩 캐시 보존). 삭제 대상에 `emb:` 키가 섞이면 중단하는 안전 가드 추가.
 - [x] dryRun 기본(각 키군 카운트만 출력 + 보존 `emb:msg:*` 카운트), `--execute`로 실제 삭제. 삭제 건수 로그.
-- [x] 사용법 주석: **dual-write ON → orchestrator 정지 → 이 스크립트 실행 → 재기동 → (EPIC35) backfill** 순서 명시.
+- [x] 사용법 주석: **orchestrator 정지 → 이 스크립트 실행 → 재기동 → dual-write ON(T) → (EPIC35) backfill** 순서 명시. (초기화가 dual-write ON보다 **먼저** — 아니면 `[T, 초기화]` 사이 dual-write 턴이 지워져 유실. forward-only 교정 2026-07.)
 
 ### 주의사항
 - 반드시 orchestrator **정지 상태**에서 실행(실행 중이면 in-memory와 Redis가 어긋남). 실행 후 재기동해야 backfill이 채운 in-memory를 report가 읽는다.
@@ -92,7 +92,7 @@ backfill(EPIC35) 이후 backend-유래 데이터로 리포트를 실제 생성�
 ## 구현 규칙
 
 ### 순서 (EPIC35와 맞물림)
-- 정지 → **9.1 초기화** → 기동 → **EPIC35 backfill** → **9.2 검증**. 초기화는 backfill 직전 1회.
+- 정지 → **9.1 초기화** → 기동 → **dual-write ON(T)** → **EPIC35 backfill(<T)** → **9.2 검증**. 초기화는 **dual-write ON보다 먼저**(아니면 `[T, 초기화]` dual-write 턴 유실) 그리고 backfill 직전 1회.
 
 ### 금지사항
 - `emb:msg:*` 삭제 금지(캐시 보존).
