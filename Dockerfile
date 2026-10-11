@@ -4,7 +4,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY --chmod=644 package*.json ./
 
 # Install dependencies
 RUN npm ci
@@ -21,7 +21,7 @@ FROM node:20-alpine
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY --chmod=644 package*.json ./
 
 # Install production dependencies only
 RUN npm ci --omit=dev
