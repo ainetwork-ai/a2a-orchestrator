@@ -6,6 +6,8 @@ import { v4 as uuidv4 } from "uuid";
 import { Message, AgentPersona } from "../types";
 import { HEADER_THREAD_ID, HEADER_AGENT_ID, sanitizeHeaderValue } from "../utils/headers";
 
+import { resolveAgentCardUrl } from "./agentEndpointMap";
+
 export class Agent {
   private persona: AgentPersona;
   private a2aClient: A2AClient | null = null;
@@ -41,7 +43,7 @@ export class Agent {
         headers.set(HEADER_AGENT_ID, sanitizeHeaderValue(this.persona.name));
         return originalFetch(input, { ...init, headers });
       };
-      this.initializingClient = A2AClient.fromCardUrl(this.persona.a2aUrl, { fetchImpl: customFetch })
+      this.initializingClient = A2AClient.fromCardUrl(resolveAgentCardUrl(this.persona.a2aUrl), { fetchImpl: customFetch })
         .then(client => { this.a2aClient = client; return client; });
     }
     return this.initializingClient;

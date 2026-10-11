@@ -1,4 +1,4 @@
-import { getRedisClient } from "../utils/redis";
+import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
 
 const AGENTS_KEY = "orchestrator:agents";
 
@@ -29,6 +29,7 @@ class AgentService {
       await redis.sAdd(AGENTS_KEY, value);
     } catch (error) {
       console.error("[AgentService] Error registering agent:", error);
+      rethrowAuthoritativeStateError(error);
     }
   }
 
@@ -44,6 +45,7 @@ class AgentService {
       await redis.sAdd(AGENTS_KEY, values);
     } catch (error) {
       console.error("[AgentService] Error registering agents:", error);
+      rethrowAuthoritativeStateError(error);
     }
   }
 
@@ -58,6 +60,7 @@ class AgentService {
       return members.map((m) => JSON.parse(m) as RegisteredAgent);
     } catch (error) {
       console.error("[AgentService] Error getting agents:", error);
+      rethrowAuthoritativeStateError(error);
       return [];
     }
   }
@@ -71,6 +74,7 @@ class AgentService {
       return agents.some((a) => a.a2aUrl === a2aUrl);
     } catch (error) {
       console.error("[AgentService] Error checking agent:", error);
+      rethrowAuthoritativeStateError(error);
       return false;
     }
   }
@@ -85,6 +89,7 @@ class AgentService {
       await redis.sRem(AGENTS_KEY, value);
     } catch (error) {
       console.error("[AgentService] Error removing agent:", error);
+      rethrowAuthoritativeStateError(error);
     }
   }
 }

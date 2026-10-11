@@ -4,7 +4,7 @@ import https from "https";
 import RequestManager from "./requestManager";
 import { MessageDAG } from "./messageDAG";
 import { Verifier } from "./verifier";
-import { getRedisClient } from "../utils/redis";
+import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
 import { parseJsonResponse } from "../utils/llm";
 
 // Create a custom agent that allows self-signed certificates
@@ -31,6 +31,7 @@ export class World {
   private userIntent: string = "";
   private currentConversationMessageCount: number = 0; // Count messages since last user message
   private userId?: string;
+  private persistenceFailure: Error | null = null;
 
   constructor(apiUrl: string, model: string, threadId: string, agentPersonas?: AgentPersona[], userId?: string) {
     this.apiUrl = apiUrl;
@@ -309,7 +310,7 @@ Respond in JSON format only:
     this.messageDAG.addMessage(message);
 
     // Save to Redis
-    this.saveMessagesToRedis(this.threadId);
+    await this.saveMessagesToRedis(this.threadId);
 
     return message.id;
   }
@@ -328,7 +329,7 @@ Respond in JSON format only:
    * Idempotent: a message id already present in the DAG is skipped, so batch
    * re-POSTs and partial/out-of-order posts (F3) are safe.
    */
-  ingestMessage(msg: {
+  async ingestMessage(msg: {
     id: string;
     speaker: string;
     content: string;
@@ -336,9 +337,12 @@ Respond in JSON format only:
     replyTo?: string;
     status?: "accepted" | "dropped";
     senderA2aUrl?: string;
-  }): { ingested: boolean } {
+  }): Promise<{ ingested: boolean }> {
     // Idempotency: skip if this id is already in the DAG.
     if (this.messageDAG.getMessage(msg.id)) {
+      // A prior attempt may have appended in memory but failed to commit.
+      // Retry persistence before acknowledging an idempotent replay.
+      await this.saveMessagesToRedis(this.threadId);
       return { ingested: false };
     }
 
@@ -357,7 +361,7 @@ Respond in JSON format only:
 
     // Persist. Ingest uses caller-supplied ids, so messageIdCounter is left
     // untouched here; saveMessagesToRedis preserves its existing value.
-    this.saveMessagesToRedis(this.threadId);
+    await this.saveMessagesToRedis(this.threadId);
 
     return { ingested: true };
   }
@@ -459,7 +463,7 @@ Respond in JSON format only:
         });
 
       // Save to Redis
-      this.saveMessagesToRedis(this.threadId);
+      await this.saveMessagesToRedis(this.threadId);
 
       return acceptedMessage;
     }
@@ -550,7 +554,7 @@ Respond in JSON format only:
         console.log(`[AUTO] ${nextAgent.getName()} responded. Next: ${this.nextSpeaker.name}`);
 
         // Save to Redis
-        this.saveMessagesToRedis(this.threadId);
+        await this.saveMessagesToRedis(this.threadId);
 
         // Run verification in background (non-blocking)
         this.verifier.verify(
@@ -591,10 +595,12 @@ Respond in JSON format only:
   }
 
   getHistory(): Message[] {
+    if (this.persistenceFailure) throw this.persistenceFailure;
     return this.messageDAG.getAllMessages();
   }
 
   getMainHistory(): Message[] {
+    if (this.persistenceFailure) throw this.persistenceFailure;
     return this.messageDAG.getMainHistory();
   }
 
@@ -602,7 +608,7 @@ Respond in JSON format only:
     return this.agents;
   }
 
-  clearHistory(): void {
+  async clearHistory(): Promise<void> {
     this.messageDAG.clear();
     this.messageIdCounter = 0;
     this.currentBlock = "";
@@ -615,7 +621,7 @@ Respond in JSON format only:
     this.currentConversationMessageCount = 0;
 
     // Save cleared state to Redis
-    this.saveMessagesToRedis(this.threadId);
+    await this.saveMessagesToRedis(this.threadId);
   }
 
   /**
@@ -707,8 +713,11 @@ Respond in JSON format only:
         currentConversationMessageCount: this.currentConversationMessageCount,
       };
       await redis.set(`messages:${threadId}`, JSON.stringify(data));
+      this.persistenceFailure = null;
     } catch (error) {
       console.error(`[World] Error saving messages to Redis:`, error);
+      if (process.env.STATE_BACKEND === "ain-blockchain") this.persistenceFailure = error instanceof Error ? error : new Error("Authoritative state persistence failed");
+      rethrowAuthoritativeStateError(error);
     }
   }
 
@@ -740,8 +749,11 @@ Respond in JSON format only:
 
         console.log(`[World] Loaded ${parsed.messages?.length || 0} messages for thread ${threadId}`);
       }
+      this.persistenceFailure = null;
     } catch (error) {
       console.error(`[World] Error loading messages from Redis:`, error);
+      if (process.env.STATE_BACKEND === "ain-blockchain") this.persistenceFailure = error instanceof Error ? error : new Error("Authoritative state read failed");
+      rethrowAuthoritativeStateError(error);
     }
   }
 }

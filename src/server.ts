@@ -9,12 +9,14 @@ import ingestRouter from "./routes/ingest";
 import ThreadManager from "./world/threadManager";
 import ReportService from "./services/reportService";
 import { initRedis } from "./utils/redis";
+import { loadAgentEndpointMap } from "./world/agentEndpointMap";
 
 // Load environment variables
 dotenv.config();
 
 // Initialize Redis and ThreadManager
 async function initialize() {
+  if (process.env.AGENT_ENDPOINT_MAP) loadAgentEndpointMap(process.env.AGENT_ENDPOINT_MAP);
   const apiUrl = process.env.LLM_API_URL;
   const model = process.env.LLM_MODEL;
 
@@ -37,6 +39,7 @@ async function initialize() {
   // Load existing threads from Redis
   const threadManager = ThreadManager.getInstance();
   await threadManager.loadThreadsFromRedis();
+  ReportService.getInstance().startPublication();
 
   // EPIC8: the ingest endpoint fails closed when its shared secret is absent.
   if (!process.env.INGEST_TOKEN) {
