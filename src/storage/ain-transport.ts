@@ -4,6 +4,7 @@ export interface ChainOperation { type: "SET_VALUE" | "SET_RULE"; ref: string; v
 export interface StateChainTransport {
   readonly operationJsonBytesLimit?: number;
   get<T>(ref: string): Promise<T | null>;
+  childLabels?(ref: string): Promise<string[]>;
   write(operations: ChainOperation[]): Promise<void>;
 }
 export class AinWriteRejected extends Error {}
@@ -54,6 +55,28 @@ export class AinTransport implements StateChainTransport {
   }
   get<T>(ref: string): Promise<T | null> {
     return this.rpc("ain_get", { type: "GET_VALUE", ref, is_final: true });
+  }
+  async childLabels(ref: string): Promise<string[]> {
+    const labels: string[] = [], seen = new Set<string>(), cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let pageNumber = 0; pageNumber < 100000; pageNumber++) {
+      const page = await this.rpc<Record<string, unknown> | null>("ain_get", {
+        type: "GET_VALUE", ref, is_final: true, is_partial: true, is_shallow: true,
+        ...(cursor === undefined ? {} : { last_end_label: cursor }),
+      });
+      if (page === null) return labels;
+      if (typeof page !== "object" || Array.isArray(page)) throw Error("Invalid AIN child listing");
+      const children = Object.keys(page).filter(label => !label.startsWith("#"));
+      for (const label of children) {
+        if (seen.has(label)) throw Error("AIN child listing repeated a record");
+        seen.add(label); labels.push(label);
+      }
+      const next = page["#end_label"];
+      if (!children.length || next === undefined) return labels;
+      if (typeof next !== "string" || !next || cursors.has(next)) throw Error("AIN child listing cursor did not advance");
+      cursors.add(next); cursor = next;
+    }
+    throw Error("AIN child listing exceeded the page limit");
   }
   async write(operations: ChainOperation[]): Promise<void> {
     if (!operations.length) return;

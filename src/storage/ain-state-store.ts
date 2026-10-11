@@ -147,9 +147,11 @@ export class AinStateStore {
   async keys(pattern: string): Promise<string[]> {
     if (pattern.includes("?") || pattern.includes("[") || pattern.includes("\\")) throw Error("Unsupported state key pattern");
     const regex = new RegExp("^" + pattern.split("*").map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
-    const heads = await this.chain.get<Record<string, StoredHead>>(`${this.root}/heads`) ?? {};
+    const ids = this.chain.childLabels
+      ? await this.chain.childLabels(`${this.root}/heads`)
+      : Object.keys(await this.chain.get<Record<string, StoredHead>>(`${this.root}/heads`) ?? {});
     const result: string[] = [];
-    for (const id of Object.keys(heads)) {
+    for (const id of ids) {
       const { state } = await this.read(id);
       if (state && regex.test(state.key)) result.push(state.key);
     }
