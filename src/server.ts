@@ -9,12 +9,14 @@ import ingestRouter from "./routes/ingest";
 import ThreadManager from "./world/threadManager";
 import ReportService from "./services/reportService";
 import { initRedis } from "./utils/redis";
+import { loadAgentEndpointMap } from "./world/agentEndpointMap";
 
 // Load environment variables
 dotenv.config();
 
 // Initialize Redis and ThreadManager
 async function initialize() {
+  if (process.env.AGENT_ENDPOINT_MAP) loadAgentEndpointMap(process.env.AGENT_ENDPOINT_MAP);
   const apiUrl = process.env.LLM_API_URL;
   const model = process.env.LLM_MODEL;
 
