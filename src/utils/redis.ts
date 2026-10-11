@@ -1,29 +1,44 @@
 import { createClient } from "redis";
+import { createAinStateStore } from "../storage/config";
+import type { StateClient } from "../storage/state-client";
 
-export type RedisClient = ReturnType<typeof createClient>;
+export type RedisClient = StateClient;
 
 let redisClient: RedisClient | null = null;
+export function rethrowAuthoritativeStateError(error: unknown): void {
+  if (process.env.STATE_BACKEND === "ain-blockchain") throw error;
+}
 
 export async function initRedis(): Promise<RedisClient> {
   if (redisClient) {
     return redisClient;
   }
 
+  const backend = process.env.STATE_BACKEND ?? "redis";
+  if (backend === "ain-blockchain") {
+    // No fallback: an unavailable chain or invalid organization configuration
+    // must never silently persist conversations to the previous datastore.
+    const client = await createAinStateStore(process.env.AIN_STATE_CONFIG ?? "");
+    redisClient = client;
+    return client;
+  }
+  if (backend !== "redis") throw Error("Unsupported STATE_BACKEND");
   const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
-  redisClient = createClient({
+  const client = createClient({
     url: redisUrl,
   });
 
-  redisClient.on("error", (err) => {
+  client.on("error", (err) => {
     console.error("Redis Client Error:", err);
   });
 
-  redisClient.on("connect", () => {
+  client.on("connect", () => {
     console.log("✅ Redis connected");
   });
 
-  await redisClient.connect();
+  await client.connect();
+  redisClient = client;
 
   return redisClient;
 }

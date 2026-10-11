@@ -27,7 +27,7 @@ interface IngestMessage {
 }
 
 // POST /api/ingest/conversation
-router.post("/conversation", (req: Request, res: Response) => {
+router.post("/conversation", async (req: Request, res: Response) => {
   try {
     const { thread, messages } = req.body ?? {};
 
@@ -92,7 +92,7 @@ router.post("/conversation", (req: Request, res: Response) => {
 
     // --- Upsert thread + append messages (through the managers) ---
     const threadManager = ThreadManager.getInstance();
-    const world = threadManager.getOrCreateThread({
+    const world = await threadManager.getOrCreateThread({
       id: thread.id,
       name: thread.name,
       userId: thread.userId,
@@ -106,7 +106,7 @@ router.post("/conversation", (req: Request, res: Response) => {
     let ingested = 0;
     let skipped = 0;
     for (const m of ordered) {
-      const result = world.ingestMessage({
+      const result = await world.ingestMessage({
         id: m.id,
         speaker: m.speaker,
         content: m.content,

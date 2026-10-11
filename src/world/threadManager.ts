@@ -1,7 +1,7 @@
 import { World } from "./world";
 import { Thread, AgentPersona } from "../types";
 import { v4 as uuidv4 } from "uuid";
-import { getRedisClient } from "../utils/redis";
+import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
 import AgentService from "../services/agentService";
 
 // EPIC8: agent shape accepted by the ingest upsert path. a2aUrl is optional on
@@ -18,6 +18,7 @@ class ThreadManager {
   private static instance: ThreadManager;
   private threads: Map<string, Thread> = new Map();
   private worlds: Map<string, World> = new Map();
+  private mutations = new Map<string, Promise<unknown>>();
   private apiUrl: string;
   private model: string;
 
@@ -39,6 +40,14 @@ class ThreadManager {
     }
     return ThreadManager.instance;
   }
+  private serializeThread<T>(id: string, action: () => Promise<T>): Promise<T> {
+    const prior = this.mutations.get(id) ?? Promise.resolve();
+    const pending = prior.catch(() => {}).then(action);
+    this.mutations.set(id, pending);
+    const clear = () => { if (this.mutations.get(id) === pending) this.mutations.delete(id); };
+    void pending.then(clear, clear);
+    return pending;
+  }
 
   /**
    * Save thread to Redis
@@ -50,10 +59,14 @@ class ThreadManager {
       await redis.sAdd("threads:list", thread.id);
     } catch (error) {
       console.error(`[ThreadManager] Error saving thread to Redis:`, error);
+      rethrowAuthoritativeStateError(error);
     }
   }
 
   async saveUserIdToRedis(threadId: string, userId: string): Promise<void> {
+    return this.serializeThread(threadId, () => this.persistUserId(threadId, userId));
+  }
+  private async persistUserId(threadId: string, userId: string): Promise<void> {
     try {
       const redis = getRedisClient();
       
@@ -79,6 +92,7 @@ class ThreadManager {
       console.log(`[ThreadManager] Saved userId to thread ${threadId}`);
     } catch (error) {
       console.error(`[ThreadManager] Error saving userId to Redis:`, error);
+      rethrowAuthoritativeStateError(error);
     }
   }
 
@@ -108,13 +122,14 @@ class ThreadManager {
       console.log(`[ThreadManager] Loaded ${threadIds.length} threads from Redis`);
     } catch (error) {
       console.error(`[ThreadManager] Error loading threads from Redis:`, error);
+      rethrowAuthoritativeStateError(error);
     }
   }
 
   /**
    * Create a new thread
    */
-  createThread(name: string, userId: string, agents: AgentPersona[] = []): Thread {
+  async createThread(name: string, userId: string, agents: AgentPersona[] = []): Promise<Thread> {
     const thread: Thread = {
       id: uuidv4(),
       name,
@@ -124,14 +139,13 @@ class ThreadManager {
       userId,
     };
 
-    this.threads.set(thread.id, thread);
-
     // Create a new World instance for this thread
     const world = new World(this.apiUrl, this.model, thread.id, agents, userId);
-    this.worlds.set(thread.id, world);
 
     // Save to Redis
-    this.saveThreadToRedis(thread);
+    await this.saveThreadToRedis(thread);
+    this.threads.set(thread.id, thread);
+    this.worlds.set(thread.id, world);
 
     console.log(`[ThreadManager] Created thread: ${thread.id} (${thread.name})`);
     return thread;
@@ -149,21 +163,38 @@ class ThreadManager {
    * Agents are merged (dedup) and registered into orchestrator:agents so the
    * report agentUrls/agentNames filters resolve.
    */
-  getOrCreateThread(input: {
+  async getOrCreateThread(input: {
     id: string;
     name?: string;
     userId: string;
     agents: IngestAgentInput[];
-  }): World {
-    const existing = this.threads.get(input.id);
+  }): Promise<World> {
+    return this.serializeThread(input.id, () => this.upsertThread(input));
+  }
+  private async upsertThread(input: { id: string; name?: string; userId: string; agents: IngestAgentInput[] }): Promise<World> {
+    let existing = this.threads.get(input.id);
+    if (!existing && process.env.STATE_BACKEND === "ain-blockchain") {
+      const persisted = await getRedisClient().get(`thread:${input.id}`);
+      if (persisted) {
+        existing = JSON.parse(persisted) as Thread;
+        if (existing.id !== input.id) throw Error("Persisted thread identity mismatch");
+        await getRedisClient().sAdd("threads:list", input.id);
+        const restoredWorld = new World(this.apiUrl, this.model, existing.id, existing.agents, existing.userId);
+        await restoredWorld.loadMessagesFromRedis(existing.id);
+        this.threads.set(existing.id, existing);
+        this.worlds.set(existing.id, restoredWorld);
+      }
+    }
     if (existing) {
       // Merge any newly-seen agents; keep the existing thread + World.
-      this.mergeAgents(existing, input.agents);
+      await this.mergeAgents(existing, input.agents);
+      await this.registerAgents(this.threads.get(input.id)!.agents);
       let world = this.worlds.get(input.id);
       if (!world) {
         // Defensive: thread present but World missing (never happens via the
         // normal create/load paths). Rebuild so ingest has somewhere to append.
-        world = new World(this.apiUrl, this.model, existing.id, existing.agents, existing.userId);
+        const current = this.threads.get(input.id)!;
+        world = new World(this.apiUrl, this.model, current.id, current.agents, current.userId);
         this.worlds.set(existing.id, world);
       }
       return world;
@@ -181,13 +212,12 @@ class ThreadManager {
       userId: input.userId,
     };
 
-    this.threads.set(thread.id, thread);
-
     const world = new World(this.apiUrl, this.model, thread.id, agents, thread.userId);
-    this.worlds.set(thread.id, world);
 
-    this.saveThreadToRedis(thread);
-    this.registerAgents(agents);
+    await this.saveThreadToRedis(thread);
+    await this.registerAgents(agents);
+    this.threads.set(thread.id, thread);
+    this.worlds.set(thread.id, world);
 
     console.log(`[ThreadManager] getOrCreateThread created thread ${thread.id} with ${agents.length} agent(s)`);
     return world;
@@ -214,12 +244,12 @@ class ThreadManager {
    * that set is keyed by a2aUrl. Agents without a2aUrl still live in
    * thread.agents, so the agentNames filter continues to resolve them.
    */
-  private registerAgents(agents: AgentPersona[]): void {
+  private async registerAgents(agents: AgentPersona[]): Promise<void> {
     const registerable = agents
       .filter((a) => a.name && a.a2aUrl)
       .map((a) => ({ name: a.name, a2aUrl: a.a2aUrl }));
     if (registerable.length > 0) {
-      AgentService.getInstance().registerAgents(registerable);
+      await AgentService.getInstance().registerAgents(registerable);
     }
   }
 
@@ -233,7 +263,8 @@ class ThreadManager {
    * missing fields rather than being dropped or duplicated; an unmatched agent
    * is added as before. Backfill never overwrites an already-non-empty field.
    */
-  private mergeAgents(thread: Thread, incoming: IngestAgentInput[]): void {
+  private async mergeAgents(thread: Thread, incoming: IngestAgentInput[]): Promise<void> {
+    thread = structuredClone(thread);
     const added: AgentPersona[] = [];
     let backfilled = false;
     for (const inc of incoming) {
@@ -260,13 +291,13 @@ class ThreadManager {
 
     if (added.length > 0 || backfilled) {
       thread.updatedAt = Date.now();
-      const world = this.worlds.get(thread.id);
-      if (world) world.updateAgents(thread.agents);
-      this.saveThreadToRedis(thread);
+      await this.saveThreadToRedis(thread);
       // Re-register all: a backfilled a2aUrl can make a previously
       // unregisterable entry registerable. orchestrator:agents is a SET and
       // registerAgents filters by a2aUrl, so re-registering all is idempotent.
-      this.registerAgents(thread.agents);
+      await this.registerAgents(thread.agents);
+      this.threads.set(thread.id, thread);
+      this.worlds.get(thread.id)?.updateAgents(thread.agents);
       console.log(
         `[ThreadManager] Merged agents into thread ${thread.id} (added ${added.length}, backfilled=${backfilled})`
       );
@@ -316,9 +347,11 @@ class ThreadManager {
    * Delete a thread
    */
   async deleteThread(threadId: string): Promise<boolean> {
-    const deleted = this.threads.delete(threadId);
+    return this.serializeThread(threadId, () => this.persistDeletion(threadId));
+  }
+  private async persistDeletion(threadId: string): Promise<boolean> {
+    const deleted = this.threads.has(threadId);
     if (deleted) {
-      this.worlds.delete(threadId);
 
       // Delete from Redis
       try {
@@ -328,7 +361,10 @@ class ThreadManager {
         await redis.sRem("threads:list", threadId);
       } catch (error) {
         console.error(`[ThreadManager] Error deleting thread from Redis:`, error);
+        rethrowAuthoritativeStateError(error);
       }
+      this.threads.delete(threadId);
+      this.worlds.delete(threadId);
 
       console.log(`[ThreadManager] Deleted thread: ${threadId}`);
     }
@@ -338,8 +374,12 @@ class ThreadManager {
   /**
    * Add an agent to a thread
    */
-  addAgent(threadId: string, agent: AgentPersona): boolean {
-    const thread = this.threads.get(threadId);
+  async addAgent(threadId: string, agent: AgentPersona): Promise<boolean> {
+    return this.serializeThread(threadId, () => this.persistAddedAgent(threadId, agent));
+  }
+  private async persistAddedAgent(threadId: string, agent: AgentPersona): Promise<boolean> {
+    const cached = this.threads.get(threadId);
+    const thread = cached && structuredClone(cached);
     if (!thread) {
       return false;
     }
@@ -354,13 +394,11 @@ class ThreadManager {
     thread.updatedAt = Date.now();
 
     // Update the World instance
-    const world = this.worlds.get(threadId);
-    if (world) {
-      world.updateAgents(thread.agents);
-    }
 
     // Save to Redis
-    this.saveThreadToRedis(thread);
+    await this.saveThreadToRedis(thread);
+    this.threads.set(threadId, thread);
+    this.worlds.get(threadId)?.updateAgents(thread.agents);
 
     console.log(`[ThreadManager] Added agent ${agent.name} to thread ${threadId}`);
     return true;
@@ -369,8 +407,12 @@ class ThreadManager {
   /**
    * Remove an agent from a thread
    */
-  removeAgent(threadId: string, agentId: string): boolean {
-    const thread = this.threads.get(threadId);
+  async removeAgent(threadId: string, agentId: string): Promise<boolean> {
+    return this.serializeThread(threadId, () => this.persistRemovedAgent(threadId, agentId));
+  }
+  private async persistRemovedAgent(threadId: string, agentId: string): Promise<boolean> {
+    const cached = this.threads.get(threadId);
+    const thread = cached && structuredClone(cached);
     if (!thread) {
       return false;
     }
@@ -385,13 +427,11 @@ class ThreadManager {
     thread.updatedAt = Date.now();
 
     // Update the World instance
-    const world = this.worlds.get(threadId);
-    if (world) {
-      world.updateAgents(thread.agents);
-    }
 
     // Save to Redis
-    this.saveThreadToRedis(thread);
+    await this.saveThreadToRedis(thread);
+    this.threads.set(threadId, thread);
+    this.worlds.get(threadId)?.updateAgents(thread.agents);
 
     console.log(`[ThreadManager] Removed agent ${agentId} from thread ${threadId}`);
     return true;
@@ -400,8 +440,12 @@ class ThreadManager {
   /**
    * Update thread name
    */
-  updateThreadName(threadId: string, name: string): boolean {
-    const thread = this.threads.get(threadId);
+  async updateThreadName(threadId: string, name: string): Promise<boolean> {
+    return this.serializeThread(threadId, () => this.persistThreadName(threadId, name));
+  }
+  private async persistThreadName(threadId: string, name: string): Promise<boolean> {
+    const cached = this.threads.get(threadId);
+    const thread = cached && structuredClone(cached);
     if (!thread) {
       return false;
     }
@@ -410,7 +454,8 @@ class ThreadManager {
     thread.updatedAt = Date.now();
 
     // Save to Redis
-    this.saveThreadToRedis(thread);
+    await this.saveThreadToRedis(thread);
+    this.threads.set(threadId, thread);
 
     return true;
   }

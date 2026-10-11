@@ -33,7 +33,7 @@ router.get("/", (req: Request, res: Response) => {
 });
 
 // Create a new thread
-router.post("/", (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   try {
     const { name, agents, userId } = req.body;
 
@@ -51,7 +51,7 @@ router.post("/", (req: Request, res: Response) => {
     }
 
     const threadManager = ThreadManager.getInstance();
-    const thread = threadManager.createThread(name, userId, agents || []);
+    const thread = await threadManager.createThread(name, userId, agents || []);
 
     // Register agents to Redis Set for report filtering
     if (agents && agents.length > 0) {
@@ -148,7 +148,7 @@ router.delete("/:threadId", async (req: Request, res: Response) => {
 });
 
 // Update thread name
-router.patch("/:threadId", (req: Request, res: Response) => {
+router.patch("/:threadId", async (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
     const { name } = req.body;
@@ -166,7 +166,7 @@ router.patch("/:threadId", (req: Request, res: Response) => {
     }
 
     const threadManager = ThreadManager.getInstance();
-    const updated = threadManager.updateThreadName(threadId, name);
+    const updated = await threadManager.updateThreadName(threadId, name);
 
     if (!updated) {
       return res.status(404).json({
@@ -188,7 +188,7 @@ router.patch("/:threadId", (req: Request, res: Response) => {
 });
 
 // Add an agent to a thread
-router.post("/:threadId/agents", (req: Request, res: Response) => {
+router.post("/:threadId/agents", async (req: Request, res: Response) => {
   try {
     const { threadId } = req.params;
     const agent: AgentPersona = req.body;
@@ -211,7 +211,7 @@ router.post("/:threadId/agents", (req: Request, res: Response) => {
     }
 
     const threadManager = ThreadManager.getInstance();
-    const added = threadManager.addAgent(threadId, agent);
+    const added = await threadManager.addAgent(threadId, agent);
 
     if (!added) {
       return res.status(400).json({
@@ -237,7 +237,7 @@ router.post("/:threadId/agents", (req: Request, res: Response) => {
 });
 
 // Remove an agent from a thread
-router.delete("/:threadId/agents/:agentId", (req: Request, res: Response) => {
+router.delete("/:threadId/agents/:agentId", async (req: Request, res: Response) => {
   try {
     const { threadId, agentId } = req.params;
 
@@ -254,7 +254,7 @@ router.delete("/:threadId/agents/:agentId", (req: Request, res: Response) => {
     }
 
     const threadManager = ThreadManager.getInstance();
-    const removed = threadManager.removeAgent(threadId, agentId);
+    const removed = await threadManager.removeAgent(threadId, agentId);
 
     if (!removed) {
       return res.status(404).json({
@@ -355,7 +355,7 @@ router.post("/:threadId/messages", async (req: Request, res: Response) => {
 
     // Handle reset action
     if (action === "reset") {
-      world.clearHistory();
+      await world.clearHistory();
       return res.json({
         success: true
       });

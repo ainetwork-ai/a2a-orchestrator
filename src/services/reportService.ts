@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { getRedisClient } from "../utils/redis";
+import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
 import { generateReport } from "./reportPipeline";
 import {
   Report,
@@ -102,11 +102,12 @@ class ReportService {
       tags: params.tags,
     };
 
-    this.jobs.set(jobId, job);
     await this.saveJobToRedis(job);
 
     // Start processing in background
-    this.processJob(jobId);
+    void this.processJob(jobId).catch((error: Error) => {
+      console.error(`[ReportService] Job ${jobId} could not persist its final status: ${error.message}`);
+    });
 
     return job;
   }
@@ -250,6 +251,7 @@ class ReportService {
       };
     } catch (error) {
       console.error("[ReportService] Error querying jobs:", error);
+      rethrowAuthoritativeStateError(error);
       return {
         items: [],
         total: 0,
@@ -264,8 +266,12 @@ class ReportService {
    * Process job in background
    */
   private async processJob(jobId: string): Promise<void> {
-    const job = this.jobs.get(jobId);
-    if (!job) return;
+    const savedJob = this.jobs.get(jobId);
+    if (!savedJob) return;
+    // Work on a separate snapshot so polling sees only confirmed state.
+    const job: ReportJob = JSON.parse(JSON.stringify(savedJob));
+    let progressWrites: Promise<void> = Promise.resolve();
+    let progressFailure: unknown;
 
     try {
       // Update status to processing
@@ -281,9 +287,16 @@ class ReportService {
         (progress: ReportJobProgress) => {
           job.progress = progress;
           job.updatedAt = Date.now();
-          this.saveJobToRedis(job);
+          const snapshot: ReportJob = JSON.parse(JSON.stringify(job));
+          progressWrites = progressWrites.then(async () => {
+            if (progressFailure) return;
+            await this.saveJobToRedis(snapshot);
+          }).catch((error: unknown) => { progressFailure = error; });
         }
       );
+
+      await progressWrites;
+      if (progressFailure) throw progressFailure;
 
       // Update job with result
       job.status = "completed";
@@ -299,6 +312,7 @@ class ReportService {
 
       console.log(`[ReportService] Job ${jobId} completed`);
     } catch (error: any) {
+      await progressWrites;
       console.error(`[ReportService] Job ${jobId} failed:`, error);
 
       job.status = "failed";
@@ -366,8 +380,10 @@ class ReportService {
     try {
       const redis = getRedisClient();
       await redis.set(`${JOB_PREFIX}${job.id}`, JSON.stringify(job));
+      this.jobs.set(job.id, JSON.parse(JSON.stringify(job)));
     } catch (error) {
       console.error("[ReportService] Error saving job to Redis:", error);
+      rethrowAuthoritativeStateError(error);
     }
   }
 
@@ -384,6 +400,7 @@ class ReportService {
       return null;
     } catch (error) {
       console.error("[ReportService] Error getting job from Redis:", error);
+      rethrowAuthoritativeStateError(error);
       return null;
     }
   }
@@ -396,10 +413,11 @@ class ReportService {
     updates: { title?: string; description?: string; tags?: string[] }
   ): Promise<ReportJob | null> {
     try {
-      const job = await this.getJob(jobId);
-      if (!job) {
+      const current = await this.getJob(jobId);
+      if (!current) {
         return null;
       }
+      const job: ReportJob = JSON.parse(JSON.stringify(current));
 
       // Update metadata fields
       if (updates.title !== undefined) {
@@ -416,12 +434,12 @@ class ReportService {
 
       // Save to Redis and memory
       await this.saveJobToRedis(job);
-      this.jobs.set(jobId, job);
 
       console.log(`[ReportService] Job ${jobId} metadata updated`);
       return job;
     } catch (error) {
       console.error("[ReportService] Error updating job:", error);
+      rethrowAuthoritativeStateError(error);
       return null;
     }
   }
@@ -455,6 +473,7 @@ class ReportService {
       return true;
     } catch (error) {
       console.error("[ReportService] Error deleting job:", error);
+      rethrowAuthoritativeStateError(error);
       return false;
     }
   }

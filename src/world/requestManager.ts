@@ -157,6 +157,11 @@ class RequestManager {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
+    // Scope the service credential to the configured model endpoint; never
+    // forward it to arbitrary agent URLs or a different request destination.
+    if (process.env.LLM_API_KEY && apiUrl === process.env.LLM_API_URL) {
+      headers.Authorization = `Bearer ${process.env.LLM_API_KEY}`;
+    }
     if (threadId) headers[HEADER_THREAD_ID] = sanitizeHeaderValue(threadId);
 
     const response = await fetch(apiUrl, {

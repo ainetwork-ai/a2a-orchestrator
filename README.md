@@ -469,7 +469,7 @@ make prod-logs    # View logs
 - **Runtime**: Node.js 22
 - **Framework**: Express.js
 - **Language**: TypeScript
-- **Database**: Redis (state, cache, embeddings)
+- **Database**: Redis or encrypted AIN Blockchain organization state
 - **Protocol**: A2A (Agent-to-Agent)
 - **AI Integration**: vLLM / OpenAI compatible API
 - **Embeddings**: OpenAI / Azure OpenAI text-embedding-3
