@@ -28,5 +28,5 @@ export function privateIngress({ upstreamPort, allowedClients, upstreamHost = '1
   });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  privateIngress({ upstreamPort: 13004, allowedClients: ['192.168.1.14'] }).listen(13005, '192.168.1.41');
+  privateIngress({ upstreamPort: 13004, allowedClients: ['192.168.1.175'] }).listen(13005, '192.168.1.41');
 }
