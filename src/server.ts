@@ -37,6 +37,7 @@ async function initialize() {
   // Load existing threads from Redis
   const threadManager = ThreadManager.getInstance();
   await threadManager.loadThreadsFromRedis();
+  ReportService.getInstance().startPublication();
 
   // EPIC8: the ingest endpoint fails closed when its shared secret is absent.
   if (!process.env.INGEST_TOKEN) {

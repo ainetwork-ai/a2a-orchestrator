@@ -27,3 +27,5 @@ node --test dist/storage/*.test.js dist/world/requestManager.test.js dist/migrat
 ```
 
 Before production cutover, import the entire source snapshot and compare every original record and API response after restarting the Blockchain adapter. Local tests alone do not prove real-chain durability, organization access, report publication, or agent behavior parity.
+
+For future readable reports, set `AINMEM_REPORT_CONFIG` to another runtime-owned `0600` JSON file with `organizationId`, the Ainmem `/api/integrations/orchestrator/reports` endpoint, its organization-specific machine `token`, and an HTTPS `publicBaseUrl`. Enable Ainmem's matching scoped publisher configuration separately. New jobs enter a persistent `report:ainmem:pending` set before their creation is acknowledged. Completed jobs publish with their original IDs and payload, then store a publication receipt before leaving the queue. HTTP failures and uncertain receipt writes retain the queue entry for retry after restart. Existing historical report jobs are not automatically republished.

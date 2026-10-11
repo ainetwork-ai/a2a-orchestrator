@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
 import { generateReport } from "./reportPipeline";
+import { AinmemReportPublisher, loadAinmemReportConfig } from "./ainmemReports";
 import {
   Report,
   ReportJob,
@@ -54,6 +55,8 @@ class ReportService {
   private jobs: Map<string, ReportJob> = new Map();
   private apiUrl: string;
   private model: string;
+  private publisher?: AinmemReportPublisher;
+  private publicationTimer?: NodeJS.Timeout;
 
   private constructor(apiUrl: string, model: string) {
     this.apiUrl = apiUrl;
@@ -72,6 +75,15 @@ class ReportService {
       throw new Error("ReportService not initialized. Call initialize() first.");
     }
     return ReportService.instance;
+  }
+
+  startPublication(): void {
+    const path = process.env.AINMEM_REPORT_CONFIG;
+    if (!path || this.publisher) return;
+    this.publisher = new AinmemReportPublisher(getRedisClient(), loadAinmemReportConfig(path));
+    const flush = () => { void this.publisher!.flush().catch((error: Error) => console.error(`[ReportService] Ainmem publication will retry: ${error.message}`)); };
+    this.publicationTimer = setInterval(flush, 60000);
+    this.publicationTimer.unref(); flush();
   }
 
   /**
@@ -103,6 +115,9 @@ class ReportService {
     };
 
     await this.saveJobToRedis(job);
+    // Queue publication before acknowledging the new job. The queue lives in
+    // the selected authoritative store and survives a process restart.
+    if (this.publisher) await this.publisher.enqueue(jobId);
 
     // Start processing in background
     void this.processJob(jobId).catch((error: Error) => {
@@ -310,6 +325,7 @@ class ReportService {
       const cacheKey = this.generateCacheKey(job.params);
       await this.saveToCache(cacheKey, job);
 
+      if (this.publisher) void this.publisher.flush().catch((error: Error) => console.error(`[ReportService] Ainmem publication will retry: ${error.message}`));
       console.log(`[ReportService] Job ${jobId} completed`);
     } catch (error: any) {
       await progressWrites;
