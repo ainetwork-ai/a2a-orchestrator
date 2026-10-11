@@ -22,7 +22,8 @@ export class AinTransport implements StateChainTransport {
   private timestamp = 0;
   readonly address: string;
   readonly operationJsonBytesLimit: number;
-  constructor(private readonly config: AinTransportConfig) {
+  constructor(private readonly config: AinTransportConfig,
+    private readonly pause = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))) {
     const url = new URL(config.rpcUrl);
     if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash
       || !Number.isSafeInteger(config.chainId) || config.chainId < 0
@@ -35,16 +36,26 @@ export class AinTransport implements StateChainTransport {
     this.operationJsonBytesLimit = Math.floor((config.transactionBytesLimit - 1024) / 2) - 256;
   }
   async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    const response = await fetch(this.config.rpcUrl, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params, protoVer: "1.6.1" } }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok) throw Error(`AIN RPC HTTP ${response.status}`);
-    const envelope = await response.json() as { error?: { code: number }; result?: { code?: number; result?: T } };
-    if (envelope.error || !envelope.result || (envelope.result.code !== undefined && envelope.result.code !== 0)
-      || !Object.prototype.hasOwnProperty.call(envelope.result, "result")) throw Error(`AIN RPC rejected ${method}`);
-    return envelope.result.result as T;
+    const readOnly = ["ain_get", "net_getChainId", "ain_getBlockByNumber", "ain_getTransactionByHash"].includes(method);
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(this.config.rpcUrl, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params, protoVer: "1.6.1" } }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw Error(`AIN RPC HTTP ${response.status}`);
+      const envelope = await response.json() as { error?: { code: number }; result?: { code?: number; result?: T } };
+      // The verified layer gateway briefly refuses reads while its witness check
+      // recovers. Never resend a signed transaction or change the selected chain.
+      const code = envelope.error?.code;
+      if (readOnly && (code === -32050 || code === -32052) && attempt < 4) {
+        await this.pause(2000 * 2 ** attempt);
+        continue;
+      }
+      if (envelope.error || !envelope.result || (envelope.result.code !== undefined && envelope.result.code !== 0)
+        || !Object.prototype.hasOwnProperty.call(envelope.result, "result")) throw Error(`AIN RPC rejected ${method}${code === undefined ? "" : ` (code ${code})`}`);
+      return envelope.result.result as T;
+    }
   }
   async verifyNetwork(): Promise<void> {
     const chain = await this.rpc<number>("net_getChainId");
