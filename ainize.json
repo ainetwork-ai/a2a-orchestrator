@@ -1,0 +1,7 @@
+{
+  "name": "a2a-orchestrator",
+  "kind": "service",
+  "port": 3001,
+  "healthcheck": "/api/health",
+  "build": { "dockerfile": "Dockerfile", "context": "." }
+}
