@@ -12,6 +12,8 @@ materialize() { # <b64 var> <path var> <file name>
   eval "b64=\${$1:-}"
   if [ -n "$b64" ]; then
     printf '%s' "$b64" | base64 -d > "$dir/$3"
+    # A value over the 32 KiB secret limit may be stored gzip-compressed (gzip -9c file | base64 -w0).
+    if gzip -t "$dir/$3" 2>/dev/null; then gunzip -c "$dir/$3" > "$dir/$3.tmp" && mv "$dir/$3.tmp" "$dir/$3"; fi
     chmod 600 "$dir/$3"
     export "$2=$dir/$3"
   fi
