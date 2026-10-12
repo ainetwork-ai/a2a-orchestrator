@@ -3,5 +3,33 @@
   "kind": "service",
   "port": 3001,
   "healthcheck": "/api/health",
-  "build": { "dockerfile": "Dockerfile", "context": "." }
+  "build": { "dockerfile": "Dockerfile.ainize", "context": "." },
+  "access": "public",
+  "resources": { "memory": "1g", "cpus": 1 },
+  "env": {
+    "NODE_ENV": "production",
+    "STATE_BACKEND": "ain-blockchain",
+    "NODE_USE_ENV_PROXY": "1",
+    "LLM_API_URL": "http://192.168.1.41:8080/v1/chat/completions",
+    "LLM_MODEL": "Qwen3.8-Flash-Next",
+    "ALLOWED_ORIGINS": "https://ainspace.ainetwork.xyz,https://ainspace.ainetwork.ai,https://a2a-orchestration.ainetwork.ai,https://ainspace-agent-report-page.vercel.app",
+    "AZURE_OPENAI_EMBEDDING_BASE_URL": "https://azure-comcom-resource.services.ai.azure.com",
+    "AZURE_OPENAI_EMBEDDING_API_VERSION": "2023-05-15",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME": "ainspace-report-embedding-3-large"
+  },
+  "secrets": [
+    "INGEST_TOKEN",
+    "LLM_API_KEY",
+    "AZURE_OPENAI_EMBEDDING_API_KEY",
+    "AIN_STATE_CONFIG_B64",
+    "AINMEM_REPORT_CONFIG_B64",
+    "AGENT_ENDPOINT_MAP_B64"
+  ],
+  "allowedHosts": [
+    "azure-comcom-resource.services.ai.azure.com",
+    "ainmem.ainetwork.ai",
+    "ainize.ai",
+    "192.168.1.41:8080",
+    "192.168.1.49:19077"
+  ]
 }
