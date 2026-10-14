@@ -1,14 +1,14 @@
-// orchestrator 대화·리포트 Redis 데이터 초기화 일회성 스크립트 (EPIC9 Story 9.1).
+// orchestrator 대화·리포트 AIN Blockchain 데이터 초기화 일회성 스크립트 (EPIC9 Story 9.1).
 //
 // 목적: ainspace 대화를 backend → orchestrator 로 전량 re-mirror(A안, a2a-slack-notion
 // EPIC35 backfill) 하기 **직전에** orchestrator 의 frozen(컷오버 이전) 대화·리포트
-// Redis 키를 비운다. 초기화하지 않으면 같은 대화가 (구 orchestrator thread id) +
+// 저장소 키를 비운다. 초기화하지 않으면 같은 대화가 (구 orchestrator thread id) +
 // (새 backend conversationId) 두 벌로 중복된다 (EPIC9 배경 참조).
 //
 // ⚠ 반드시 orchestrator 를 **정지**한 상태에서 실행할 것.
 //    orchestrator 는 부팅 시 loadThreadsFromRedis(threadManager.ts)로 in-memory World 를
-//    채우고, report 는 그 in-memory 를 읽는다. 실행 중에 Redis 를 지우면 in-memory 와
-//    Redis 가 어긋나(desync) report 가 유령 데이터를 읽는다.
+//    채우고, report 는 그 in-memory 를 읽는다. 실행 중에 저장소를 지우면 in-memory 와
+//    저장소가 어긋나(desync) report 가 유령 데이터를 읽는다.
 //
 // 실행 순서 (EPIC35 와 맞물림) — 초기화가 dual-write ON 보다 **먼저**:
 //    1. orchestrator **정지**
@@ -22,33 +22,21 @@
 //  초기화가 [T, 초기화] 사이 dual-write 턴을 지워 유실 → 초기화를 앞으로 옮김.)
 //
 // 삭제 키군: thread:*, threads:list, messages:*, orchestrator:agents,
-//            report:job:*, report:cache:*
+//            report:job:*, report:cache:*, report:index:*
 // 보존 키군: emb:msg:*  ← 임베딩 캐시. content-hash 키라 re-mirror 시 캐시 히트로
 //            재임베딩 비용을 아낀다. **절대 삭제하지 않는다.**
 //
 // 안전장치: 기본 dryRun(삭제 X, 키군 카운트만 출력). 실제 삭제는 --execute.
-//           REDIS_URL 을 명시적으로 요구한다(잘못된 Redis 초기화 방지).
+//           AIN_STATE_CONFIG 를 명시적으로 요구하고 조직·네트워크·서명 규칙을 검증한다.
 //
 // 사용:
-//   REDIS_URL=redis://... npx ts-node src/scripts/reset-report-store.ts            # dryRun
-//   REDIS_URL=redis://... npx ts-node src/scripts/reset-report-store.ts --execute  # 실제 삭제
+//   AIN_STATE_CONFIG=/private/state-config.json npx ts-node src/scripts/reset-report-store.ts            # dryRun
+//   AIN_STATE_CONFIG=/private/state-config.json npx ts-node src/scripts/reset-report-store.ts --execute  # 실제 삭제
 
 import "dotenv/config";
-import { closeRedis, getRedisClient, initRedis, type RedisClient } from "../utils/redis";
+import { closeStateStore, getStateClient, initStateStore, type StateClient } from "../utils/state";
 
-// SCAN 으로 지울 패턴 키군 (여러 키).
-const PATTERN_GROUPS = [
-  "thread:*",
-  "messages:*",
-  "report:job:*",
-  "report:cache:*",
-] as const;
-
-// 단일 키군 (Set 하나씩).
-const LITERAL_KEYS = ["threads:list", "orchestrator:agents"] as const;
-
-// 보존 키군 — 절대 삭제하지 않는다(임베딩 캐시).
-const PRESERVE_PATTERN = "emb:msg:*";
+import { RESET_PATTERNS as PATTERN_GROUPS, RESET_SET_KEYS as LITERAL_KEYS, PRESERVE_PATTERN } from "./reset-report-policy";
 
 interface Args {
   execute: boolean;
@@ -73,16 +61,11 @@ function requireEnv(name: string): string {
   return v;
 }
 
-/** redis URL 의 password 를 마스킹해 로그에 안전하게 출력한다. */
-function maskRedisUrl(url: string): string {
-  return url.replace(/(:\/\/[^:@/]*:)[^@/]*@/, "$1***@");
-}
-
 /**
  * MATCH 패턴에 걸리는 키를 SCAN 으로 전량 수집한다.
  * SCAN 은 스캔 중 존재한 키를 중복 반환할 수 있으므로 Set 으로 dedupe 한다.
  */
-async function scanKeys(redis: RedisClient, pattern: string): Promise<string[]> {
+async function scanKeys(redis: StateClient, pattern: string): Promise<string[]> {
   const found = new Set<string>();
   for await (const key of redis.scanIterator({ MATCH: pattern, COUNT: 500 })) {
     found.add(key);
@@ -92,7 +75,7 @@ async function scanKeys(redis: RedisClient, pattern: string): Promise<string[]> 
 
 /** 키를 배치로 나눠 삭제하고 실제 삭제 건수를 합산해 돌려준다. */
 async function delInBatches(
-  redis: RedisClient,
+  redis: StateClient,
   keys: string[],
   batchSize = 500,
 ): Promise<number> {
@@ -106,19 +89,19 @@ async function delInBatches(
 async function main(): Promise<void> {
   const { execute } = parseArgs(process.argv.slice(2));
   const dryRun = !execute;
-  const redisUrl = requireEnv("REDIS_URL");
+  requireEnv("AIN_STATE_CONFIG");
 
   console.log(
     `=== orchestrator 대화·리포트 store 초기화 (${dryRun ? "DRY-RUN" : "EXECUTE"}) ===`,
   );
-  console.log(`redis: ${maskRedisUrl(redisUrl)}`);
+  console.log("state backend: ain-blockchain (encrypted organization storage)");
   console.log(
     "⚠ orchestrator 가 **정지**된 상태여야 합니다. 실행 후 재기동 → (EPIC35) backfill 순서.",
   );
 
   try {
-    await initRedis();
-    const redis = getRedisClient();
+    await initStateStore();
+    const redis = getStateClient();
 
     // ---- 1. 삭제 대상 수집 ----
     const groups: KeyGroup[] = [];
@@ -189,12 +172,12 @@ async function main(): Promise<void> {
     console.error("✖ 초기화 중단:", err);
     process.exitCode = 1;
   } finally {
-    // initRedis 실패 시 client 가 없거나 미연결 상태라 closeRedis(quit) 가 되레 throw 할 수
+    // initStateStore 실패 시 client 가 없거나 미연결 상태라 closeStateStore(quit) 가 되레 throw 할 수
     // 있다. void main 이라 그 throw 가 unhandled rejection 으로 새므로 여기서 삼킨다.
     try {
-      await closeRedis();
+      await closeStateStore();
     } catch (closeErr) {
-      console.error("✖ Redis 종료 실패(무시):", closeErr);
+      console.error("✖ 저장소 종료 실패(무시):", closeErr);
     }
   }
 }

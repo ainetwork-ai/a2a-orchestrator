@@ -115,3 +115,24 @@ test("an oversized atomic pipeline fails before any chain write", async () => {
   await assert.rejects(pipeline.exec(), /exceeds/);
   assert.equal(chain.values.size, 0);
 });
+
+test("key enumeration bounds concurrent reads, preserves order and propagates failures", async () => {
+  const { chain, codec, store } = setup();
+  for (let i = 0; i < 20; i++) await store.set(`report:job:${i}`, String(i));
+  const originalGet = chain.get.bind(chain);
+  let active = 0, peak = 0, fail = false;
+  chain.get = async <T>(ref: string): Promise<T | null> => {
+    if (!ref.includes("/heads/")) return originalGet<T>(ref);
+    active++; peak = Math.max(peak, active);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2));
+      if (fail) throw Error("authoritative enumeration failed");
+      return await originalGet<T>(ref);
+    } finally { active--; }
+  };
+  const restored = new AinStateStore(chain, codec, root);
+  assert.deepEqual(await restored.keys("report:job:*"), Array.from({ length: 20 }, (_, i) => `report:job:${i}`));
+  assert.ok(peak > 1 && peak <= 8);
+  fail = true;
+  await assert.rejects(restored.keys("report:job:*"), /authoritative enumeration failed/);
+});

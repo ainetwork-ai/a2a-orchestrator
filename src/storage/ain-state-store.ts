@@ -150,12 +150,18 @@ export class AinStateStore {
     const ids = this.chain.childLabels
       ? await this.chain.childLabels(`${this.root}/heads`)
       : Object.keys(await this.chain.get<Record<string, StoredHead>>(`${this.root}/heads`) ?? {});
-    const result: string[] = [];
-    for (const id of ids) {
-      const { state } = await this.read(id);
-      if (state && regex.test(state.key)) result.push(state.key);
-    }
-    return result;
+    // Bound RPC fan-out while avoiding thousands of sequential round trips.
+    // Keep source order and surface every authoritative read failure.
+    const matches: (string | null)[] = new Array(ids.length).fill(null);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(8, ids.length) }, async () => {
+      while (next < ids.length) {
+        const index = next++;
+        const { state } = await this.read(ids[index]);
+        if (state && regex.test(state.key)) matches[index] = state.key;
+      }
+    }));
+    return matches.filter((key): key is string => key !== null);
   }
   async exists(key: string): Promise<number> { return (await this.read(this.codec.recordId(key))).state ? 1 : 0; }
   async sCard(key: string): Promise<number> { return (await this.sMembers(key)).length; }

@@ -6,7 +6,7 @@
  */
 
 import crypto from "crypto";
-import { getRedisClient } from "../../utils/redis";
+import { getStateClient } from "../../utils/state";
 import { ParsedMessage } from "../../types/report";
 import {
   EmbeddedMessage,
@@ -94,7 +94,7 @@ export async function embedMessages(
     };
   }
 
-  const redis = getRedisClient();
+  const redis = getStateClient();
   const results: EmbeddedMessage[] = new Array(messages.length);
   const toEmbed: { index: number; message: ParsedMessage; hash: string }[] = [];
   let cacheHits = 0;

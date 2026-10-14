@@ -12,6 +12,9 @@ services:
       - .env.prod
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    user: "${AIN_STATE_UID:-1000}:${AIN_STATE_GID:-1000}"
+    volumes:
+      - ./state-config.json:/run/ain/state-config.json:ro
     restart: unless-stopped
     networks:
       - app-network

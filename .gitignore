@@ -38,3 +38,5 @@ coverage/
 
 # Misc
 .cache/
+
+state-config.json

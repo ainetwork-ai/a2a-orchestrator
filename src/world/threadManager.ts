@@ -1,7 +1,7 @@
 import { World } from "./world";
 import { Thread, AgentPersona } from "../types";
 import { v4 as uuidv4 } from "uuid";
-import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
+import { getStateClient, rethrowAuthoritativeStateError } from "../utils/state";
 import AgentService from "../services/agentService";
 
 // EPIC8: agent shape accepted by the ingest upsert path. a2aUrl is optional on
@@ -54,7 +54,7 @@ class ThreadManager {
    */
   private async saveThreadToRedis(thread: Thread): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       await redis.set(`thread:${thread.id}`, JSON.stringify(thread));
       await redis.sAdd("threads:list", thread.id);
     } catch (error) {
@@ -68,7 +68,7 @@ class ThreadManager {
   }
   private async persistUserId(threadId: string, userId: string): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       
       const threadData = await redis.get(`thread:${threadId}`);
       if (!threadData) {
@@ -101,7 +101,7 @@ class ThreadManager {
    */
   async loadThreadsFromRedis(): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const threadIds = await redis.sMembers("threads:list");
 
       for (const threadId of threadIds) {
@@ -174,11 +174,11 @@ class ThreadManager {
   private async upsertThread(input: { id: string; name?: string; userId: string; agents: IngestAgentInput[] }): Promise<World> {
     let existing = this.threads.get(input.id);
     if (!existing && process.env.STATE_BACKEND === "ain-blockchain") {
-      const persisted = await getRedisClient().get(`thread:${input.id}`);
+      const persisted = await getStateClient().get(`thread:${input.id}`);
       if (persisted) {
         existing = JSON.parse(persisted) as Thread;
         if (existing.id !== input.id) throw Error("Persisted thread identity mismatch");
-        await getRedisClient().sAdd("threads:list", input.id);
+        await getStateClient().sAdd("threads:list", input.id);
         const restoredWorld = new World(this.apiUrl, this.model, existing.id, existing.agents, existing.userId);
         await restoredWorld.loadMessagesFromRedis(existing.id);
         this.threads.set(existing.id, existing);
@@ -355,7 +355,7 @@ class ThreadManager {
 
       // Delete from Redis
       try {
-        const redis = getRedisClient();
+        const redis = getStateClient();
         await redis.del(`thread:${threadId}`);
         await redis.del(`messages:${threadId}`);
         await redis.sRem("threads:list", threadId);

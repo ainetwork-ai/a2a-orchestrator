@@ -1,7 +1,7 @@
 // ainspace Redis → backend Postgres 일회성 이관 exporter.
 //
 // 흐름 (계약 docs/integration/ainspace-migration-guide.md):
-//   0. env: MIGRATION_TOKEN(migration:write, 운영자 발급), BACKEND_BASE, REDIS_URL
+//   0. env: MIGRATION_TOKEN(migration:write, 운영자 발급), BACKEND_BASE, AIN_STATE_CONFIG
 //   1. 전 thread 스캔 → agent union(Set ∪ thread.agents) 수집
 //   2. POST /agents  (errors 있으면 dms 진입 전 중단)
 //   3. orphan(userId 없음) 제외 → thread별 envelope(owner shape 판정 + senderRef 해소)
@@ -10,12 +10,12 @@
 // 안전장치: 기본 dryRun(쓰기 X). 실제 적재는 --execute. 401이면 즉시 중단(멱등 재개).
 //
 // 사용:
-//   MIGRATION_TOKEN=... BACKEND_BASE=https://... REDIS_URL=redis://... \
+//   MIGRATION_TOKEN=... BACKEND_BASE=https://... AIN_STATE_CONFIG=/private/state-config.json \
 //     npx ts-node src/scripts/export-to-backend.ts            # dryRun
 //   ... npx ts-node src/scripts/export-to-backend.ts --execute  # 실제 적재
 
 import "dotenv/config";
-import { closeRedis, getRedisClient, initRedis } from "../utils/redis";
+import { closeStateStore, getStateClient, initStateStore } from "../utils/state";
 import {
   MigrationAuthError,
   MigrationClient,
@@ -168,8 +168,8 @@ async function main(): Promise<void> {
   console.log(`backend: ${baseUrl}`);
 
   const client = new MigrationClient({ baseUrl, token });
-  await initRedis();
-  const redis = getRedisClient();
+  await initStateStore();
+  const redis = getStateClient();
 
   try {
     // ---- 1. 스캔 ----
@@ -283,7 +283,7 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
   } finally {
-    await closeRedis();
+    await closeStateStore();
   }
 }
 

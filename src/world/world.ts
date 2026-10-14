@@ -4,7 +4,7 @@ import https from "https";
 import RequestManager from "./requestManager";
 import { MessageDAG } from "./messageDAG";
 import { Verifier } from "./verifier";
-import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
+import { getStateClient, rethrowAuthoritativeStateError } from "../utils/state";
 import { parseJsonResponse } from "../utils/llm";
 
 // Create a custom agent that allows self-signed certificates
@@ -702,7 +702,7 @@ Respond in JSON format only:
    */
   async saveMessagesToRedis(threadId: string): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const messages = this.messageDAG.getAllMessages();
       const data = {
         messages,
@@ -726,7 +726,7 @@ Respond in JSON format only:
    */
   async loadMessagesFromRedis(threadId: string): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const data = await redis.get(`messages:${threadId}`);
 
       if (data) {
