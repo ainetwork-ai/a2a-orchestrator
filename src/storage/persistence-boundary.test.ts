@@ -92,6 +92,10 @@ test("thread and ingest acknowledgement waits for authoritative persistence; fai
     assert.equal(JSON.parse((await getStateClient().get("report:job:" + reportJob.id))!).title, "confirmed-title");
     await reports.updateJob(reportJob.id, { title: "new-confirmed-title" });
     assert.equal((await reports.getJob(reportJob.id))?.title, "new-confirmed-title");
+    await getStateClient().sAdd("report:index:job_ids", [reportJob.id, "missing-report-id"]);
+    await getStateClient().set("report:index:job_ids:v1_ready", "1");
+    const indexed = await reports.queryJobs({});
+    assert.deepEqual(indexed.items.map(item => item.jobId), [reportJob.id], "Missing indexed jobs must be skipped");
     await closeStateStore();
     process.env.STATE_BACKEND = "redis";
     await assert.rejects(initStateStore(), /Redis state is deprecated/);
