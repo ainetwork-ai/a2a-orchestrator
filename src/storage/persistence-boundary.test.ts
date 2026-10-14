@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { AinTransport } from "./ain-transport";
 import { stateHeadWriteRule, stateChunksWriteRule } from "./ain-state-store";
-import { initRedis, closeRedis, getRedisClient } from "../utils/redis";
+import { initStateStore, closeStateStore, getStateClient } from "../utils/state";
 import ThreadManager from "../world/threadManager";
 import ReportService from "../services/reportService";
 
@@ -53,7 +53,7 @@ test("thread and ingest acknowledgement waits for authoritative persistence; fai
   const path = join(directory, "state.json"); writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
   process.env.STATE_BACKEND = "ain-blockchain"; process.env.AIN_STATE_CONFIG = path;
   try {
-    await initRedis();
+    await initStateStore();
     const manager = ThreadManager.initialize("http://unused.invalid", "unused");
     waitForWrite = new Promise<void>(resolve => { release = resolve; });
     let acknowledged = false;
@@ -84,21 +84,25 @@ test("thread and ingest acknowledgement waits for authoritative persistence; fai
     assert.equal(manager.getThread(input.id)?.name, "updated-name");
     const reports = ReportService.initialize("http://unused.invalid", "unused");
     const reportJob = { id: "original-report-id", status: "completed", title: "confirmed-title", createdAt: 100, updatedAt: 100, params: {} };
-    await getRedisClient().set("report:job:" + reportJob.id, JSON.stringify(reportJob));
+    await getStateClient().set("report:job:" + reportJob.id, JSON.stringify(reportJob));
     assert.equal((await reports.getJob(reportJob.id))?.title, "confirmed-title");
     failNextWrite = true;
     await assert.rejects(reports.updateJob(reportJob.id, { title: "uncommitted-title" }), /HTTP 503/);
     assert.equal((await reports.getJob(reportJob.id))?.title, "confirmed-title", "Failed report metadata writes must not leak into the polling cache");
-    assert.equal(JSON.parse((await getRedisClient().get("report:job:" + reportJob.id))!).title, "confirmed-title");
+    assert.equal(JSON.parse((await getStateClient().get("report:job:" + reportJob.id))!).title, "confirmed-title");
     await reports.updateJob(reportJob.id, { title: "new-confirmed-title" });
     assert.equal((await reports.getJob(reportJob.id))?.title, "new-confirmed-title");
-    await closeRedis();
+    await closeStateStore();
+    process.env.STATE_BACKEND = "redis";
+    await assert.rejects(initStateStore(), /Redis state is deprecated/);
+    delete process.env.STATE_BACKEND; process.env.AIN_STATE_CONFIG = "";
+    await assert.rejects(initStateStore(), /AIN_STATE_CONFIG is required/);
     process.env.STATE_BACKEND = "invalid";
-    await assert.rejects(initRedis(), /Unsupported STATE_BACKEND/);
+    await assert.rejects(initStateStore(), /Unsupported STATE_BACKEND/);
     process.env.STATE_BACKEND = "ain-blockchain"; process.env.AIN_STATE_CONFIG = "";
-    await assert.rejects(initRedis(), /AIN_STATE_CONFIG is required/);
+    await assert.rejects(initStateStore(), /AIN_STATE_CONFIG is required/);
   } finally {
-    release?.(); await closeRedis();
+    release?.(); await closeStateStore();
     if (previousBackend === undefined) delete process.env.STATE_BACKEND; else process.env.STATE_BACKEND = previousBackend;
     if (previousConfig === undefined) delete process.env.AIN_STATE_CONFIG; else process.env.AIN_STATE_CONFIG = previousConfig;
     await new Promise<void>(resolve => server.close(() => resolve())); rmSync(directory, { recursive: true });

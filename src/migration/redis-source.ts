@@ -3,7 +3,7 @@
 //   threads:list (Set)         → thread:{id} (JSON Thread)
 //   messages:{threadId}        → { messages: Message[], ... }
 
-import type { RedisClient } from "../utils/redis";
+import type { StateClient } from "../utils/state";
 import type { Message, Thread } from "../types";
 import type { AgentEnvelope } from "./contract";
 
@@ -11,7 +11,7 @@ const AGENTS_KEY = "orchestrator:agents";
 
 /** orchestrator:agents Set → AgentEnvelope[]. 파싱 실패 멤버는 건너뛴다. */
 export async function readRegisteredAgents(
-  redis: RedisClient,
+  redis: StateClient,
 ): Promise<AgentEnvelope[]> {
   const members = await redis.sMembers(AGENTS_KEY);
   const out: AgentEnvelope[] = [];
@@ -27,7 +27,7 @@ export async function readRegisteredAgents(
 }
 
 /** threads:list → thread:{id} 전량 로드. 누락/파싱 실패 thread는 건너뛴다. */
-export async function readAllThreads(redis: RedisClient): Promise<Thread[]> {
+export async function readAllThreads(redis: StateClient): Promise<Thread[]> {
   const ids = await redis.sMembers("threads:list");
   const out: Thread[] = [];
   for (const id of ids) {
@@ -47,7 +47,7 @@ export async function readAllThreads(redis: RedisClient): Promise<Thread[]> {
 
 /** messages:{threadId}의 .messages[]. 없으면 빈 배열. */
 export async function readThreadMessages(
-  redis: RedisClient,
+  redis: StateClient,
   threadId: string,
 ): Promise<Message[]> {
   const raw = await redis.get(`messages:${threadId}`);

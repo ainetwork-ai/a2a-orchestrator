@@ -15,7 +15,7 @@
 //   ... npx ts-node src/scripts/export-to-backend.ts --execute  # 실제 적재
 
 import "dotenv/config";
-import { closeRedis, getRedisClient, initRedis } from "../utils/redis";
+import { closeStateStore, getStateClient, initStateStore } from "../utils/state";
 import {
   MigrationAuthError,
   MigrationClient,
@@ -168,8 +168,8 @@ async function main(): Promise<void> {
   console.log(`backend: ${baseUrl}`);
 
   const client = new MigrationClient({ baseUrl, token });
-  await initRedis();
-  const redis = getRedisClient();
+  await initStateStore();
+  const redis = getStateClient();
 
   try {
     // ---- 1. 스캔 ----
@@ -283,7 +283,7 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
   } finally {
-    await closeRedis();
+    await closeStateStore();
   }
 }
 

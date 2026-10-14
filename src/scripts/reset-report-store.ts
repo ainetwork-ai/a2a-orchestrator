@@ -34,7 +34,7 @@
 //   REDIS_URL=redis://... npx ts-node src/scripts/reset-report-store.ts --execute  # 실제 삭제
 
 import "dotenv/config";
-import { closeRedis, getRedisClient, initRedis, type RedisClient } from "../utils/redis";
+import { closeStateStore, getStateClient, initStateStore, type StateClient } from "../utils/state";
 
 // SCAN 으로 지울 패턴 키군 (여러 키).
 const PATTERN_GROUPS = [
@@ -82,7 +82,7 @@ function maskRedisUrl(url: string): string {
  * MATCH 패턴에 걸리는 키를 SCAN 으로 전량 수집한다.
  * SCAN 은 스캔 중 존재한 키를 중복 반환할 수 있으므로 Set 으로 dedupe 한다.
  */
-async function scanKeys(redis: RedisClient, pattern: string): Promise<string[]> {
+async function scanKeys(redis: StateClient, pattern: string): Promise<string[]> {
   const found = new Set<string>();
   for await (const key of redis.scanIterator({ MATCH: pattern, COUNT: 500 })) {
     found.add(key);
@@ -92,7 +92,7 @@ async function scanKeys(redis: RedisClient, pattern: string): Promise<string[]> 
 
 /** 키를 배치로 나눠 삭제하고 실제 삭제 건수를 합산해 돌려준다. */
 async function delInBatches(
-  redis: RedisClient,
+  redis: StateClient,
   keys: string[],
   batchSize = 500,
 ): Promise<number> {
@@ -117,8 +117,8 @@ async function main(): Promise<void> {
   );
 
   try {
-    await initRedis();
-    const redis = getRedisClient();
+    await initStateStore();
+    const redis = getStateClient();
 
     // ---- 1. 삭제 대상 수집 ----
     const groups: KeyGroup[] = [];
@@ -189,10 +189,10 @@ async function main(): Promise<void> {
     console.error("✖ 초기화 중단:", err);
     process.exitCode = 1;
   } finally {
-    // initRedis 실패 시 client 가 없거나 미연결 상태라 closeRedis(quit) 가 되레 throw 할 수
+    // initStateStore 실패 시 client 가 없거나 미연결 상태라 closeStateStore(quit) 가 되레 throw 할 수
     // 있다. void main 이라 그 throw 가 unhandled rejection 으로 새므로 여기서 삼킨다.
     try {
-      await closeRedis();
+      await closeStateStore();
     } catch (closeErr) {
       console.error("✖ Redis 종료 실패(무시):", closeErr);
     }

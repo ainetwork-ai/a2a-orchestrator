@@ -8,7 +8,7 @@ import reportsRouter from "./routes/reports";
 import ingestRouter from "./routes/ingest";
 import ThreadManager from "./world/threadManager";
 import ReportService from "./services/reportService";
-import { initRedis } from "./utils/redis";
+import { initStateStore } from "./utils/state";
 import { loadAgentEndpointMap } from "./world/agentEndpointMap";
 
 // Load environment variables
@@ -26,7 +26,7 @@ async function initialize() {
   }
 
   // Initialize Redis
-  await initRedis();
+  await initStateStore();
 
   // Initialize ThreadManager
   ThreadManager.initialize(apiUrl, model);

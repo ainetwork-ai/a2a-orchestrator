@@ -1,4 +1,4 @@
-import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
+import { getStateClient, rethrowAuthoritativeStateError } from "../utils/state";
 
 const AGENTS_KEY = "orchestrator:agents";
 
@@ -24,7 +24,7 @@ class AgentService {
    */
   async registerAgent(agent: RegisteredAgent): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const value = JSON.stringify(agent);
       await redis.sAdd(AGENTS_KEY, value);
     } catch (error) {
@@ -40,7 +40,7 @@ class AgentService {
     if (agents.length === 0) return;
 
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const values = agents.map((a) => JSON.stringify(a));
       await redis.sAdd(AGENTS_KEY, values);
     } catch (error) {
@@ -54,7 +54,7 @@ class AgentService {
    */
   async getAllAgents(): Promise<RegisteredAgent[]> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const members = await redis.sMembers(AGENTS_KEY);
 
       return members.map((m) => JSON.parse(m) as RegisteredAgent);
@@ -84,7 +84,7 @@ class AgentService {
    */
   async removeAgent(agent: RegisteredAgent): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const value = JSON.stringify(agent);
       await redis.sRem(AGENTS_KEY, value);
     } catch (error) {

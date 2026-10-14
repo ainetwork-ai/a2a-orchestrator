@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
-import { getRedisClient, rethrowAuthoritativeStateError } from "../utils/redis";
+import { getStateClient, rethrowAuthoritativeStateError } from "../utils/state";
+import { ReportJobIndex, REPORT_JOB_PREFIX } from "./report-job-index";
 import { generateReport } from "./reportPipeline";
 import { AinmemReportPublisher, loadAinmemReportConfig } from "./ainmemReports";
 import {
@@ -14,7 +15,7 @@ import {
   REPORT_CACHE_TTL_SECONDS,
 } from "../types/report";
 
-const JOB_PREFIX = "report:job:";
+const JOB_PREFIX = REPORT_JOB_PREFIX;
 const CACHE_PREFIX = "report:cache:";
 
 /**
@@ -53,6 +54,8 @@ function buildReportSummary(report: unknown): ReportJobSummary["reportSummary"] 
 class ReportService {
   private static instance: ReportService;
   private jobs: Map<string, ReportJob> = new Map();
+  private jobIndex?: ReportJobIndex;
+  private index(): ReportJobIndex { return this.jobIndex ??= new ReportJobIndex(getStateClient()); }
   private apiUrl: string;
   private model: string;
   private publisher?: AinmemReportPublisher;
@@ -80,7 +83,7 @@ class ReportService {
   startPublication(): void {
     const path = process.env.AINMEM_REPORT_CONFIG;
     if (!path || this.publisher) return;
-    this.publisher = new AinmemReportPublisher(getRedisClient(), loadAinmemReportConfig(path));
+    this.publisher = new AinmemReportPublisher(getStateClient(), loadAinmemReportConfig(path));
     const flush = () => { void this.publisher!.flush().catch((error: Error) => console.error(`[ReportService] Ainmem publication will retry: ${error.message}`)); };
     this.publicationTimer = setInterval(flush, 60000);
     this.publicationTimer.unref(); flush();
@@ -163,8 +166,8 @@ class ReportService {
    */
   async queryJobs(query: ReportJobQuery): Promise<PaginatedResult<ReportJobSummary>> {
     try {
-      const redis = getRedisClient();
-      const keys = await redis.keys(`${JOB_PREFIX}*`);
+      const redis = getStateClient();
+      const keys = await this.index().keys();
 
       if (keys.length === 0) {
         return {
@@ -357,7 +360,7 @@ class ReportService {
    */
   private async getFromCache(cacheKey: string): Promise<ReportJob | null> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const data = await redis.get(`${CACHE_PREFIX}${cacheKey}`);
       if (data) {
         const job = JSON.parse(data) as ReportJob;
@@ -378,7 +381,7 @@ class ReportService {
    */
   private async saveToCache(cacheKey: string, job: ReportJob): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       await redis.setEx(
         `${CACHE_PREFIX}${cacheKey}`,
         REPORT_CACHE_TTL_SECONDS,
@@ -394,7 +397,8 @@ class ReportService {
    */
   private async saveJobToRedis(job: ReportJob): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
+      await this.index().add(job.id);
       await redis.set(`${JOB_PREFIX}${job.id}`, JSON.stringify(job));
       this.jobs.set(job.id, JSON.parse(JSON.stringify(job)));
     } catch (error) {
@@ -408,7 +412,7 @@ class ReportService {
    */
   private async getJobFromRedis(jobId: string): Promise<ReportJob | null> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       const data = await redis.get(`${JOB_PREFIX}${jobId}`);
       if (data) {
         return JSON.parse(data) as ReportJob;
@@ -465,7 +469,7 @@ class ReportService {
    */
   async deleteJob(jobId: string): Promise<boolean> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
 
       // Check if job exists
       const job = await this.getJob(jobId);
@@ -475,6 +479,7 @@ class ReportService {
 
       // Delete from Redis
       await redis.del(`${JOB_PREFIX}${jobId}`);
+      await this.index().remove(jobId);
 
       // Delete from memory
       this.jobs.delete(jobId);
@@ -499,7 +504,7 @@ class ReportService {
    */
   async invalidateCache(params?: ReportRequestParams): Promise<void> {
     try {
-      const redis = getRedisClient();
+      const redis = getStateClient();
       if (params) {
         const cacheKey = this.generateCacheKey(params);
         await redis.del(`${CACHE_PREFIX}${cacheKey}`);

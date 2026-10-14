@@ -12,13 +12,13 @@ A multi-agent orchestration system using A2A (Agent-to-Agent) protocol. This is 
 - **Conversation Verification**: Automatic stop detection based on goal achievement
 - **Report Generation**: Embedding-based clustering with T3C-style visualization
 - **Grounded Analysis**: Opinions linked to supporting messages for verifiability
-- **Redis Integration**: Conversation persistence, state management, and embedding cache
+- **AIN Blockchain State**: Encrypted conversation persistence, state management, and embedding cache
 
 ## Quick Start
 
 ### Docker Development (Recommended)
 
-Includes Redis container for full functionality.
+Requires a private organization AIN state configuration. Redis is deprecated; no fallback is used.
 
 ```bash
 # Copy and configure environment file
@@ -28,7 +28,7 @@ cp .env.dev.example .env.dev
 # Required: LLM_API_URL, LLM_MODEL
 # Required: OPENAI_API_KEY or Azure OpenAI embedding configuration
 
-# Start development environment (includes Redis)
+# Start development environment
 make dev
 
 # View logs
@@ -47,7 +47,7 @@ The server will run on `http://localhost:3006`
 cp .env.prod.example .env.prod
 
 # Edit .env.prod with your production settings
-# Required: LLM_API_URL, LLM_MODEL, REDIS_URL
+# Required: LLM_API_URL, LLM_MODEL, AIN_STATE_CONFIG
 # Required: OPENAI_API_KEY or Azure OpenAI embedding configuration
 
 # Start production environment
@@ -64,22 +64,21 @@ The server will run on `http://localhost:3002`
 
 ### Local Development (without Docker)
 
-Requires Redis running on your local machine.
+Requires an authorized AIN RPC and a private organization state configuration.
 
 ```bash
 # Install dependencies
 npm install
 
-# Copy environment file and update Redis URL to redis://redis:6379
+# Copy environment file and configure the AIN state file
 cp .env.dev.example .env.dev
 
 # Edit .env.dev:
-# - Set REDIS_URL=redis://127.0.0.1:6379 (for local Redis)
+# - Set STATE_BACKEND=ain-blockchain and AIN_STATE_CONFIG to the private state file
 # - Configure LLM_API_URL and LLM_MODEL
 # - Configure embedding API (OpenAI or Azure OpenAI)
 
-# Make sure Redis is running locally
-# redis-server
+# Keep the state file owned by the service user with mode 0600
 
 # Run development server
 npm run dev
@@ -96,8 +95,9 @@ The server will run on `http://localhost:3001`
 NODE_ENV=development
 PORT=3001
 
-# Redis Configuration (Docker network)
-REDIS_URL=redis://redis:6379
+# Encrypted organization state
+STATE_BACKEND=ain-blockchain
+AIN_STATE_CONFIG=/run/ain/state-config.json
 
 # LLM API URL (vLLM chat completions endpoint)
 LLM_API_URL=http://your-llm-server:8000/v1/chat/completions
@@ -129,8 +129,9 @@ ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
 NODE_ENV=production
 PORT=3001
 
-# Redis Configuration (External via host)
-REDIS_URL=redis://host.docker.internal:6379
+# Encrypted organization state
+STATE_BACKEND=ain-blockchain
+AIN_STATE_CONFIG=/run/ain/state-config.json
 
 # LLM API URL (Production server)
 LLM_API_URL=https://your-production-llm-server:8000/v1/chat/completions
@@ -478,3 +479,11 @@ make prod-logs    # View logs
 ## License
 
 ISC
+
+## Redis retirement
+
+The runtime no longer includes the Redis SDK. `STATE_BACKEND=redis` is rejected; an absent backend selection defaults to AIN Blockchain and still requires a private configuration. Existing storage keys and user/report identifiers are retained.
+
+For Compose, place the organization configuration in `state-config.json`, mode 0600, owned by the configured `AIN_STATE_UID` (default 1000). The read-only mount is `/run/ain/state-config.json`. Provision the app metadata and signer rules before starting the service; see the encrypted state storage documentation. Point standalone development's `AIN_STATE_CONFIG` at the corresponding private file. Never commit this file or signing/encryption keys.
+
+Report jobs have an encrypted on-chain index. The first list bootstraps existing jobs once; subsequent queries avoid scanning unrelated conversation records. Failed authoritative reads and unconfirmed writes are surfaced to callers.
