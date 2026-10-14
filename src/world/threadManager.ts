@@ -1,3 +1,4 @@
+import { mapConcurrent } from "../utils/concurrent-map";
 import { World } from "./world";
 import { Thread, AgentPersona } from "../types";
 import { v4 as uuidv4 } from "uuid";
@@ -97,31 +98,31 @@ class ThreadManager {
   }
 
   /**
-   * Load threads from Redis
+   * Load threads from Blockchain state
    */
   async loadThreadsFromRedis(): Promise<void> {
     try {
       const redis = getStateClient();
       const threadIds = await redis.sMembers("threads:list");
 
-      for (const threadId of threadIds) {
+      const snapshots = await mapConcurrent(threadIds, 8, async threadId => {
         const threadData = await redis.get(`thread:${threadId}`);
-        if (threadData) {
-          const thread: Thread = JSON.parse(threadData);
-          this.threads.set(thread.id, thread);
-
-          // Create World instance for this thread
-          const world = new World(this.apiUrl, this.model, thread.id, thread.agents, thread.userId);
-          this.worlds.set(thread.id, world);
-
-          // Load messages for this thread
-          await world.loadMessagesFromRedis(thread.id);
-        }
+        if (!threadData) return null;
+        const thread: Thread = JSON.parse(threadData);
+        const world = new World(this.apiUrl, this.model, thread.id, thread.agents, thread.userId);
+        await world.loadMessagesFromRedis(thread.id);
+        return { thread, world };
+      });
+      // Publish only after every authoritative read succeeds, in original order.
+      for (const snapshot of snapshots) {
+        if (!snapshot) continue;
+        this.threads.set(snapshot.thread.id, snapshot.thread);
+        this.worlds.set(snapshot.thread.id, snapshot.world);
       }
 
-      console.log(`[ThreadManager] Loaded ${threadIds.length} threads from Redis`);
+      console.log(`[ThreadManager] Loaded ${threadIds.length} threads from Blockchain state`);
     } catch (error) {
-      console.error(`[ThreadManager] Error loading threads from Redis:`, error);
+      console.error(`[ThreadManager] Error loading threads from Blockchain state:`, error);
       rethrowAuthoritativeStateError(error);
     }
   }
