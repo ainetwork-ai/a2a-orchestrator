@@ -1,0 +1,27 @@
+# ainize Project image for a2a-orchestrator (kind: service, port 3001).
+# Same build as ./Dockerfile, plus:
+#  - Node 24 so that NODE_USE_ENV_PROXY=1 makes fetch (openai, @a2a-js/sdk, AIN RPC)
+#    honour the platform's HTTPS_PROXY/HTTP_PROXY egress gateway;
+#  - an entrypoint that writes the config files from *_B64 secrets into /tmp
+#    (the root filesystem is read-only) and runs node directly (no npm at runtime).
+FROM node:24-alpine AS builder
+WORKDIR /app
+COPY --chmod=644 package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:24-alpine
+WORKDIR /app
+COPY --chmod=644 package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=builder /app/dist ./dist
+COPY --chmod=755 deploy/ainize-entrypoint.sh /usr/local/bin/ainize-entrypoint.sh
+ENV NODE_ENV=production \
+    PORT=3001 \
+    STATE_BACKEND=ain-blockchain \
+    NODE_USE_ENV_PROXY=1 \
+    HOME=/tmp
+USER node
+EXPOSE 3001
+ENTRYPOINT ["/usr/local/bin/ainize-entrypoint.sh"]
