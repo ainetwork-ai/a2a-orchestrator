@@ -22,7 +22,7 @@
 //  초기화가 [T, 초기화] 사이 dual-write 턴을 지워 유실 → 초기화를 앞으로 옮김.)
 //
 // 삭제 키군: thread:*, threads:list, messages:*, orchestrator:agents,
-//            report:job:*, report:cache:*, report:index:*
+//            report:job:*, report:summary:*, report:cache:*, report:index:*
 // 보존 키군: emb:msg:*  ← 임베딩 캐시. content-hash 키라 re-mirror 시 캐시 히트로
 //            재임베딩 비용을 아낀다. **절대 삭제하지 않는다.**
 //
