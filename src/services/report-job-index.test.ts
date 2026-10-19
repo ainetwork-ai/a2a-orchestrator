@@ -40,3 +40,14 @@ test("a failed authoritative bootstrap is surfaced and retried without publishin
   await assert.rejects(index.keys(), /Authoritative scan failed/);
   fixture.setFail(false); assert.deepEqual(await index.keys(), ["report:job:old"]); assert.equal(fixture.scans(), 2);
 });
+test("confirmed readiness is remembered so listing does not re-read the flag", async () => {
+  const fixture = setup(); fixture.strings.set("report:job:old", "data");
+  let flagReads = 0; const get = fixture.store.get.bind(fixture.store);
+  fixture.store.get = async (key: string) => { if (key.endsWith("v1_ready")) flagReads++; return get(key); };
+  const index = new ReportJobIndex(fixture.store);
+  await index.keys(); await index.keys(); await index.keys();
+  assert.equal(flagReads, 1);
+  const restarted = new ReportJobIndex(fixture.store);
+  await restarted.keys(); await restarted.keys();
+  assert.equal(flagReads, 2);
+});
