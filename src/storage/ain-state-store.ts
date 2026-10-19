@@ -144,6 +144,12 @@ export class AinStateStore {
   set(key: string, value: string): Promise<string> {
     return this.serialize(() => this.change(key, () => ({ state: { key, type: "string", value, expiresAt: null }, result: "OK" })));
   }
+  /** Write only when the key is absent. The head CAS makes this hold across processes too. */
+  setNX(key: string, value: string): Promise<boolean> {
+    return this.serialize(() => this.change(key, current => current
+      ? { state: current, result: false, unchanged: true }
+      : { state: { key, type: "string", value, expiresAt: null }, result: true }));
+  }
   setEx(key: string, seconds: number, value: string): Promise<string> {
     if (!Number.isSafeInteger(seconds) || seconds <= 0) return Promise.reject(Error("Invalid state expiry"));
     const expiresAt = this.clock() + seconds * 1000;

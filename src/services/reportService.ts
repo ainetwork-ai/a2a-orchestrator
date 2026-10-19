@@ -295,7 +295,9 @@ class ReportService {
     if (!this.summaryBackfills.has(jobId)) {
       this.summaryBackfills.add(jobId);
       // Best effort: the list stays correct from the full job if this write fails.
-      void redis.set(`${SUMMARY_PREFIX}${jobId}`, JSON.stringify(summary))
+      // Write only if absent so a summary stored by a concurrent update is never
+      // replaced with one built from the older job read above.
+      void redis.setNX(`${SUMMARY_PREFIX}${jobId}`, JSON.stringify(summary))
         .catch((error: Error) => console.error(`[ReportService] Summary backfill for ${jobId} will retry: ${error.message}`))
         .finally(() => this.summaryBackfills.delete(jobId));
     }
