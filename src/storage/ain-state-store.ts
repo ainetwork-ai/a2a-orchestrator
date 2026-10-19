@@ -14,12 +14,45 @@ export function stateChunksWriteRule(address: string): string {
   return `auth.addr === '${address}' && data === null && util.isString(newData) && util.checkValuePathLen(parsedValuePath, 7) === true`;
 }
 
+/** Default budget for decrypted records kept in memory. */
+export const DEFAULT_STATE_CACHE_BYTES = 32 * 1024 * 1024;
+
 export class AinStateStore {
   private queue: Promise<unknown> = Promise.resolve();
-  private readonly cache = new Map<string, { revision: string; state: StateValue }>();
+  // Decrypted records by revision, least recently used first. Bounded by an
+  // approximate byte budget: an unbounded cache grew until the heap ran out.
+  private readonly cache = new Map<string, { revision: string; state: StateValue; bytes: number }>();
+  private cacheBytes = 0;
   constructor(private readonly chain: StateChainTransport, private readonly codec: EncryptedStateCodec,
-    private readonly root: string, private readonly clock = Date.now) {
+    private readonly root: string, private readonly clock = Date.now,
+    private readonly cacheMaxBytes = DEFAULT_STATE_CACHE_BYTES) {
     if (!/^\/apps\/[a-zA-Z0-9_]+\/state$/.test(root)) throw Error("State root must be an organization app's state path");
+    if (!Number.isSafeInteger(cacheMaxBytes) || cacheMaxBytes < 0) throw Error("Invalid state cache size");
+  }
+  get cachedBytes(): number { return this.cacheBytes; }
+  private cacheGet(id: string, revision: string): StateValue | null {
+    const entry = this.cache.get(id);
+    if (entry?.revision !== revision) return null;
+    this.cache.delete(id); this.cache.set(id, entry);
+    return entry.state;
+  }
+  private cacheSet(id: string, revision: string, state: StateValue): void {
+    this.cacheDelete(id);
+    // Strings dominate record size; UTF-16 keeps two bytes per code unit.
+    const bytes = 2 * (state.key.length + JSON.stringify(state.value).length);
+    // A single record larger than a quarter of the budget would evict most others.
+    if (bytes > this.cacheMaxBytes / 4) return;
+    this.cache.set(id, { revision, state, bytes });
+    this.cacheBytes += bytes;
+    for (const [oldest, entry] of this.cache) {
+      if (this.cacheBytes <= this.cacheMaxBytes) break;
+      this.cache.delete(oldest); this.cacheBytes -= entry.bytes;
+    }
+  }
+  private cacheDelete(id: string): void {
+    const entry = this.cache.get(id);
+    if (!entry) return;
+    this.cache.delete(id); this.cacheBytes -= entry.bytes;
   }
   private serialize<T>(action: () => Promise<T>): Promise<T> {
     const pending = this.queue.then(action, action);
@@ -29,11 +62,9 @@ export class AinStateStore {
   private headPath(id: string) { return `${this.root}/heads/${id}`; }
   private async read(id: string): Promise<{ head: StoredHead | null; state: StateValue | null }> {
     const head = await this.chain.get<StoredHead>(this.headPath(id));
-    if (!head || head.deleted) { this.cache.delete(id); return { head, state: null }; }
-    const cached = this.cache.get(id);
-    let state: StateValue;
-    if (cached?.revision === head.revision) state = cached.state;
-    else {
+    if (!head || head.deleted) { this.cacheDelete(id); return { head, state: null }; }
+    let state = this.cacheGet(id, head.revision);
+    if (!state) {
       // Reject untrusted sizes before allocating requests for a forged header.
       if (!Number.isInteger(head.chunks) || head.chunks < 1 || head.chunks > 21846) throw Error("Invalid AIN state chunk count");
       const chunks: string[] = [];
@@ -43,7 +74,7 @@ export class AinStateStore {
         chunks.push(chunk);
       }
       state = this.codec.openRecord(id, head, chunks);
-      this.cache.set(id, { revision: head.revision, state });
+      this.cacheSet(id, head.revision, state);
     }
     return { head, state: state.expiresAt !== null && state.expiresAt <= this.clock() ? null : state };
   }
@@ -89,7 +120,7 @@ export class AinStateStore {
       }
       throw error;
     }
-    this.cache.delete(id);
+    this.cacheDelete(id);
   }
   private async change<T>(key: string, modify: (current: StateValue | null) => { state: StateValue | null; result: T; unchanged?: boolean }): Promise<T> {
     const id = this.codec.recordId(key);
@@ -112,6 +143,12 @@ export class AinStateStore {
   mGet(keys: string[]): Promise<(string | null)[]> { return Promise.all(keys.map(key => this.get(key))); }
   set(key: string, value: string): Promise<string> {
     return this.serialize(() => this.change(key, () => ({ state: { key, type: "string", value, expiresAt: null }, result: "OK" })));
+  }
+  /** Write only when the key is absent. The head CAS makes this hold across processes too. */
+  setNX(key: string, value: string): Promise<boolean> {
+    return this.serialize(() => this.change(key, current => current
+      ? { state: current, result: false, unchanged: true }
+      : { state: { key, type: "string", value, expiresAt: null }, result: true }));
   }
   setEx(key: string, seconds: number, value: string): Promise<string> {
     if (!Number.isSafeInteger(seconds) || seconds <= 0) return Promise.reject(Error("Invalid state expiry"));
@@ -195,11 +232,11 @@ export class AinStateStore {
         }
         if (batch.length) await this.chain.write(batch);
         if (headers.length) await this.chain.write(headers);
-        for (const key of latest.keys()) this.cache.delete(this.codec.recordId(key));
+        for (const key of latest.keys()) this.cacheDelete(this.codec.recordId(key));
         return operations.map(() => "OK");
       }),
     };
     return pipeline;
   }
-  async quit(): Promise<void> { await this.queue; this.cache.clear(); }
+  async quit(): Promise<void> { await this.queue; this.cache.clear(); this.cacheBytes = 0; }
 }

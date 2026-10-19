@@ -136,3 +136,39 @@ test("key enumeration bounds concurrent reads, preserves order and propagates fa
   fail = true;
   await assert.rejects(restored.keys("report:job:*"), /authoritative enumeration failed/);
 });
+
+test("decrypted record cache stays within its byte budget and evicts least recently used records", async () => {
+  const { chain, codec } = setup();
+  const writer = new AinStateStore(chain, codec, root);
+  for (let i = 0; i < 20; i++) await writer.set(`thread:${i}`, "x".repeat(200));
+  await writer.set("report:job:large", "y".repeat(5000));
+  const originalGet = chain.get.bind(chain);
+  let chunkReads = 0;
+  chain.get = async <T>(ref: string): Promise<T | null> => { if (ref.includes("/chunks/")) chunkReads++; return originalGet<T>(ref); };
+  const store = new AinStateStore(chain, codec, root, Date.now, 2000);
+  for (let i = 0; i < 20; i++) assert.equal(await store.get(`thread:${i}`), "x".repeat(200));
+  assert.ok(store.cachedBytes > 0 && store.cachedBytes <= 2000);
+  chunkReads = 0; await store.get("thread:19");
+  assert.equal(chunkReads, 0, "a recently used record is served from memory");
+  await store.get("thread:0");
+  assert.ok(chunkReads > 0, "the least recently used record was evicted and is read again");
+  const before = store.cachedBytes;
+  assert.equal(await store.get("report:job:large"), "y".repeat(5000));
+  assert.equal(store.cachedBytes, before, "a record larger than a quarter of the budget is not cached");
+  await store.quit();
+  assert.equal(store.cachedBytes, 0);
+});
+
+test("setNX writes only absent keys, including against a competing process", async () => {
+  const { chain, codec, store } = setup();
+  assert.equal(await store.setNX("report:summary:a", "first"), true);
+  assert.equal(await store.setNX("report:summary:a", "second"), false);
+  assert.equal(await store.get("report:summary:a"), "first");
+  const other = new AinStateStore(chain, codec, root);
+  const results = await Promise.all([store.setNX("report:summary:b", "mine"), other.setNX("report:summary:b", "theirs")]);
+  assert.deepEqual(results.filter(Boolean).length, 1, "exactly one competing writer succeeds");
+  assert.equal(await other.get("report:summary:b"), results[0] ? "mine" : "theirs");
+  await store.set("report:summary:c", "fresh");
+  await store.del("report:summary:c");
+  assert.equal(await store.setNX("report:summary:c", "after-delete"), true);
+});

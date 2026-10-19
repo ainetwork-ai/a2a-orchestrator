@@ -6,6 +6,7 @@ export interface StateClient {
   get(key: string): Promise<string | null>;
   mGet(keys: string[]): Promise<(string | null)[]>;
   set(key: string, value: string): Promise<string | null>;
+  setNX(key: string, value: string): Promise<boolean>;
   setEx(key: string, seconds: number, value: string): Promise<string>;
   sAdd(key: string, members: string | string[]): Promise<number>;
   sMembers(key: string): Promise<string[]>;

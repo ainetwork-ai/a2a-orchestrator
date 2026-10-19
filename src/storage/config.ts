@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { AinTransport, AinTransportConfig } from "./ain-transport";
-import { AinStateStore, stateChunksWriteRule, stateHeadWriteRule } from "./ain-state-store";
+import { AinStateStore, DEFAULT_STATE_CACHE_BYTES, stateChunksWriteRule, stateHeadWriteRule } from "./ain-state-store";
 import { EncryptedStateCodec } from "./encrypted-state";
 
 interface StateConfig extends AinTransportConfig {
@@ -27,5 +27,6 @@ export async function createAinStateStore(path: string): Promise<AinStateStore> 
     const rule = await chain.rpc<{ ".rule"?: { write: unknown } } | null>("ain_get", { type: "GET_RULE", ref, is_final: true });
     if (rule?.[".rule"]?.write !== expected) throw Error("AIN state write rules are not provisioned correctly");
   }
-  return new AinStateStore(chain, new EncryptedStateCodec(config.organizationId, Buffer.from(config.encryptionKey, "hex")), root);
+  const cacheBytes = process.env.AIN_STATE_CACHE_MAX_BYTES ? Number(process.env.AIN_STATE_CACHE_MAX_BYTES) : DEFAULT_STATE_CACHE_BYTES;
+  return new AinStateStore(chain, new EncryptedStateCodec(config.organizationId, Buffer.from(config.encryptionKey, "hex")), root, Date.now, cacheBytes);
 }

@@ -96,6 +96,21 @@ test("thread and ingest acknowledgement waits for authoritative persistence; fai
     await getStateClient().set("report:index:job_ids:v1_ready", "1");
     const indexed = await reports.queryJobs({});
     assert.deepEqual(indexed.items.map(item => item.jobId), [reportJob.id], "Missing indexed jobs must be skipped");
+    // Finished jobs are listed from their small summary record and are not held in memory.
+    assert.equal(JSON.parse((await getStateClient().get("report:summary:" + reportJob.id))!).title, "new-confirmed-title");
+    assert.equal((reports as unknown as { jobs: Map<string, unknown> }).jobs.has(reportJob.id), false);
+    await getStateClient().set("report:summary:" + reportJob.id, JSON.stringify({ ...indexed.items[0], title: "from-summary" }));
+    assert.equal((await reports.queryJobs({})).items[0].title, "from-summary", "Listing must not read the full job when a summary exists");
+    // Jobs written before summaries existed are listed from the full job and backfilled once.
+    const legacyJob = { id: "legacy-report-id", status: "completed", title: "legacy-title", createdAt: 50, updatedAt: 50, params: {} };
+    await getStateClient().set("report:job:" + legacyJob.id, JSON.stringify(legacyJob));
+    await getStateClient().sAdd("report:index:job_ids", legacyJob.id);
+    const withLegacy = await reports.queryJobs({ sortBy: "createdAt", sortOrder: "asc" });
+    assert.deepEqual(withLegacy.items.map(item => item.title), ["legacy-title", "from-summary"]);
+    for (let attempt = 0; attempt < 50 && !(await getStateClient().get("report:summary:" + legacyJob.id)); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(JSON.parse((await getStateClient().get("report:summary:" + legacyJob.id))!).title, "legacy-title");
+    assert.equal(await reports.deleteJob(legacyJob.id), true);
+    assert.equal(await getStateClient().get("report:summary:" + legacyJob.id), null);
     await closeStateStore();
     process.env.STATE_BACKEND = "redis";
     await assert.rejects(initStateStore(), /Redis state is deprecated/);

@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { getStateClient, rethrowAuthoritativeStateError } from "../utils/state";
+import { mapConcurrent } from "../utils/concurrent-map";
 import { ReportJobIndex, REPORT_JOB_PREFIX } from "./report-job-index";
 import { generateReport } from "./reportPipeline";
 import { AinmemReportPublisher, loadAinmemReportConfig } from "./ainmemReports";
@@ -17,6 +18,29 @@ import {
 
 const JOB_PREFIX = REPORT_JOB_PREFIX;
 const CACHE_PREFIX = "report:cache:";
+// Listing reads these small records instead of whole jobs with full reports.
+const SUMMARY_PREFIX = "report:summary:";
+const LIST_READ_CONCURRENCY = 8;
+
+function isInFlight(job: ReportJob): boolean {
+  return job.status === "pending" || job.status === "processing";
+}
+
+function toJobSummary(job: ReportJob): ReportJobSummary {
+  return {
+    jobId: job.id,
+    status: job.status,
+    progress: job.progress,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    cachedAt: job.cachedAt,
+    error: job.error,
+    title: job.title,
+    description: job.description,
+    tags: job.tags,
+    reportSummary: job.report ? buildReportSummary(job.report) : undefined,
+  };
+}
 
 /**
  * Check if a report uses the legacy format (pre-EPIC3).
@@ -53,7 +77,10 @@ function buildReportSummary(report: unknown): ReportJobSummary["reportSummary"] 
 
 class ReportService {
   private static instance: ReportService;
+  // In-flight jobs only. Finished jobs live in the state store; keeping every
+  // job (with its full report) here grew the heap until the process died.
   private jobs: Map<string, ReportJob> = new Map();
+  private summaryBackfills = new Set<string>();
   private jobIndex?: ReportJobIndex;
   private index(): ReportJobIndex { return this.jobIndex ??= new ReportJobIndex(getStateClient()); }
   private apiUrl: string;
@@ -134,17 +161,10 @@ class ReportService {
    * Get job status and result
    */
   async getJob(jobId: string): Promise<ReportJob | null> {
-    // Check in-memory first
+    // In-flight jobs are in memory; finished jobs come from the state store.
     const memoryJob = this.jobs.get(jobId);
     if (memoryJob) return memoryJob;
-
-    // Check Redis
-    const redisJob = await this.getJobFromRedis(jobId);
-    if (redisJob) {
-      this.jobs.set(jobId, redisJob);
-      return redisJob;
-    }
-    return null;
+    return this.getJobFromRedis(jobId);
   }
 
   /**
@@ -166,7 +186,6 @@ class ReportService {
    */
   async queryJobs(query: ReportJobQuery): Promise<PaginatedResult<ReportJobSummary>> {
     try {
-      const redis = getStateClient();
       const keys = await this.index().keys();
 
       if (keys.length === 0) {
@@ -179,14 +198,9 @@ class ReportService {
         };
       }
 
-      // Fetch all jobs
-      const jobs: ReportJob[] = [];
-      for (const key of keys) {
-        const data = await redis.get(key);
-        if (data) {
-          jobs.push(JSON.parse(data) as ReportJob);
-        }
-      }
+      // Fetch summaries in bounded parallel; full jobs are read only as a fallback.
+      const summaries = await mapConcurrent(keys, LIST_READ_CONCURRENCY, key => this.readSummary(key.slice(JOB_PREFIX.length)));
+      const jobs = summaries.filter((summary): summary is ReportJobSummary => summary !== null);
 
       // Apply filters
       let filtered = jobs;
@@ -243,22 +257,7 @@ class ReportService {
       const limit = Math.min(100, Math.max(1, query.limit || 20));
       const total = filtered.length;
       const startIndex = (page - 1) * limit;
-      const paginatedJobs = filtered.slice(startIndex, startIndex + limit);
-
-      // Transform to summary
-      const items: ReportJobSummary[] = paginatedJobs.map((job) => ({
-        jobId: job.id,
-        status: job.status,
-        progress: job.progress,
-        createdAt: job.createdAt,
-        updatedAt: job.updatedAt,
-        cachedAt: job.cachedAt,
-        error: job.error,
-        title: job.title,
-        description: job.description,
-        tags: job.tags,
-        reportSummary: job.report ? buildReportSummary(job.report) : undefined,
-      }));
+      const items = filtered.slice(startIndex, startIndex + limit);
 
       return {
         items,
@@ -278,6 +277,31 @@ class ReportService {
         hasMore: false,
       };
     }
+  }
+
+  /**
+   * Summary for one listed job: memory for in-flight jobs, then the stored
+   * summary, then the full job (older jobs without a summary are backfilled).
+   */
+  private async readSummary(jobId: string): Promise<ReportJobSummary | null> {
+    const inFlight = this.jobs.get(jobId);
+    if (inFlight) return toJobSummary(inFlight);
+    const redis = getStateClient();
+    const stored = await redis.get(`${SUMMARY_PREFIX}${jobId}`);
+    if (stored) return JSON.parse(stored) as ReportJobSummary;
+    const job = await this.getJobFromRedis(jobId);
+    if (!job) return null;
+    const summary = toJobSummary(job);
+    if (!this.summaryBackfills.has(jobId)) {
+      this.summaryBackfills.add(jobId);
+      // Best effort: the list stays correct from the full job if this write fails.
+      // Write only if absent so a summary stored by a concurrent update is never
+      // replaced with one built from the older job read above.
+      void redis.setNX(`${SUMMARY_PREFIX}${jobId}`, JSON.stringify(summary))
+        .catch((error: Error) => console.error(`[ReportService] Summary backfill for ${jobId} will retry: ${error.message}`))
+        .finally(() => this.summaryBackfills.delete(jobId));
+    }
+    return summary;
   }
 
   /**
@@ -400,7 +424,14 @@ class ReportService {
       const redis = getStateClient();
       await this.index().add(job.id);
       await redis.set(`${JOB_PREFIX}${job.id}`, JSON.stringify(job));
-      this.jobs.set(job.id, JSON.parse(JSON.stringify(job)));
+      if (isInFlight(job)) {
+        this.jobs.set(job.id, JSON.parse(JSON.stringify(job)));
+      } else {
+        // The stored job is now authoritative: drop the in-flight copy before
+        // the summary write so a failure there cannot leave a stale status.
+        this.jobs.delete(job.id);
+        await redis.set(`${SUMMARY_PREFIX}${job.id}`, JSON.stringify(toJobSummary(job)));
+      }
     } catch (error) {
       console.error("[ReportService] Error saving job to Redis:", error);
       rethrowAuthoritativeStateError(error);
@@ -480,6 +511,7 @@ class ReportService {
       // Delete from Redis
       await redis.del(`${JOB_PREFIX}${jobId}`);
       await this.index().remove(jobId);
+      await redis.del(`${SUMMARY_PREFIX}${jobId}`);
 
       // Delete from memory
       this.jobs.delete(jobId);
