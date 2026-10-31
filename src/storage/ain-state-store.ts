@@ -9,7 +9,13 @@ export function stateHeadWriteRule(address: string): string {
   if (!/^0x[a-fA-F0-9]{40}$/.test(address)) throw Error("Invalid state signer address");
   return `auth.addr === '${address}' && util.isDict(newData) && util.checkValuePathLen(parsedValuePath, 5) === true && newData.previousRevision === (data === null ? null : data.revision) && newData.revision !== (data === null ? null : data.revision)`;
 }
+/** Chunks are write-once; a revision no head points at any more may only be removed. */
 export function stateChunksWriteRule(address: string): string {
+  if (!/^0x[a-fA-F0-9]{40}$/.test(address)) throw Error("Invalid state signer address");
+  return `auth.addr === '${address}' && util.checkValuePathLen(parsedValuePath, 7) === true && (newData === null || (data === null && util.isString(newData)))`;
+}
+/** The original chunk rule. It cannot remove anything, so every superseded revision stayed on chain. */
+export function legacyStateChunksWriteRule(address: string): string {
   if (!/^0x[a-fA-F0-9]{40}$/.test(address)) throw Error("Invalid state signer address");
   return `auth.addr === '${address}' && data === null && util.isString(newData) && util.checkValuePathLen(parsedValuePath, 7) === true`;
 }
@@ -25,7 +31,9 @@ export class AinStateStore {
   private cacheBytes = 0;
   constructor(private readonly chain: StateChainTransport, private readonly codec: EncryptedStateCodec,
     private readonly root: string, private readonly clock = Date.now,
-    private readonly cacheMaxBytes = DEFAULT_STATE_CACHE_BYTES) {
+    private readonly cacheMaxBytes = DEFAULT_STATE_CACHE_BYTES,
+    // Off only while the chain still carries the legacy chunk rule, which rejects removals.
+    private readonly pruneRevisions = true) {
     if (!/^\/apps\/[a-zA-Z0-9_]+\/state$/.test(root)) throw Error("State root must be an organization app's state path");
     if (!Number.isSafeInteger(cacheMaxBytes) || cacheMaxBytes < 0) throw Error("Invalid state cache size");
   }
@@ -60,23 +68,58 @@ export class AinStateStore {
     return pending;
   }
   private headPath(id: string) { return `${this.root}/heads/${id}`; }
-  private async read(id: string): Promise<{ head: StoredHead | null; state: StateValue | null }> {
-    const head = await this.chain.get<StoredHead>(this.headPath(id));
-    if (!head || head.deleted) { this.cacheDelete(id); return { head, state: null }; }
-    let state = this.cacheGet(id, head.revision);
-    if (!state) {
+  private chunkPath(id: string, revision: string, index: number) { return `${this.root}/chunks/${id}/${revision}/${index}`; }
+  /** The committed record, expired or not. */
+  private async load(id: string): Promise<{ head: StoredHead | null; state: StateValue | null }> {
+    for (let attempt = 0; ; attempt++) {
+      const head = await this.chain.get<StoredHead>(this.headPath(id));
+      if (!head || head.deleted) { this.cacheDelete(id); return { head, state: null }; }
+      let state = this.cacheGet(id, head.revision);
+      if (state) return { head, state };
       // Reject untrusted sizes before allocating requests for a forged header.
       if (!Number.isInteger(head.chunks) || head.chunks < 1 || head.chunks > 21846) throw Error("Invalid AIN state chunk count");
       const chunks: string[] = [];
       for (let index = 0; index < head.chunks; index++) {
-        const chunk = await this.chain.get<string>(`${this.root}/chunks/${id}/${head.revision}/${index}`);
-        if (typeof chunk !== "string") throw Error("Committed AIN state is missing a chunk");
+        const chunk = await this.chain.get<string>(this.chunkPath(id, head.revision, index));
+        if (typeof chunk !== "string") break;
         chunks.push(chunk);
+      }
+      if (chunks.length < head.chunks) {
+        // Another writer may have superseded this revision and removed its chunks
+        // between our two reads; only a head that stays put proves loss.
+        const latest = await this.chain.get<StoredHead>(this.headPath(id));
+        if (latest?.revision !== head.revision && attempt < 4) continue;
+        throw Error("Committed AIN state is missing a chunk");
       }
       state = this.codec.openRecord(id, head, chunks);
       this.cacheSet(id, head.revision, state);
+      return { head, state };
     }
-    return { head, state: state.expiresAt !== null && state.expiresAt <= this.clock() ? null : state };
+  }
+  private async read(id: string): Promise<{ head: StoredHead | null; state: StateValue | null }> {
+    const { head, state } = await this.load(id);
+    return { head, state: state && this.expired(state) ? null : state };
+  }
+  private expired(state: StateValue) { return state.expiresAt !== null && state.expiresAt <= this.clock(); }
+  /** Removals for every chunk of a revision that a new head has replaced. */
+  private supersededChunks(id: string, previous: StoredHead | null): ChainOperation[] {
+    if (!this.pruneRevisions || !previous || previous.deleted || !Number.isInteger(previous.chunks) || previous.chunks < 1 || previous.chunks > 21846) return [];
+    return Array.from({ length: previous.chunks }, (_, index) => ({ type: "SET_VALUE" as const, ref: this.chunkPath(id, previous.revision, index), value: null }));
+  }
+  private fits(batch: ChainOperation[], operation: ChainOperation): boolean {
+    return batch.length < (this.chain.operationCountLimit ?? 50)
+      && Buffer.byteLength(JSON.stringify([...batch, operation])) <= (this.chain.operationJsonBytesLimit ?? 4500);
+  }
+  /** Removal is cleanup, never part of the acknowledged write: leftovers are found again by sweep(). */
+  private async removeQuietly(operations: ChainOperation[]): Promise<void> {
+    let batch: ChainOperation[] = [];
+    try {
+      for (const operation of operations) {
+        if (batch.length && !this.fits(batch, operation)) { await this.chain.write(batch); batch = []; }
+        batch.push(operation);
+      }
+      if (batch.length) await this.chain.write(batch);
+    } catch { /* left for sweep() */ }
   }
   private async commit(key: string, previous: StoredHead | null, state: StateValue | null): Promise<void> {
     const id = this.codec.recordId(key);
@@ -92,17 +135,23 @@ export class AinStateStore {
     // The on-chain rule compares previousRevision at execution, including other
     // processes. A read/check alone cannot provide this guarantee.
     operations.push({ type: "SET_VALUE", ref: this.headPath(id), value: head });
+    const leftovers: ChainOperation[] = [];
     try {
       // Confirm chunk batches in order; publish the header in the last batch.
       // Normal small records commit all chunks and the CAS header together.
       const budget = this.chain.operationJsonBytesLimit ?? 4500;
       let batch: ChainOperation[] = [];
       for (const operation of operations) {
-        if (batch.length && Buffer.byteLength(JSON.stringify([...batch, operation])) > budget) {
+        if (batch.length && !this.fits(batch, operation)) {
           await this.chain.write(batch); batch = [];
         }
         if (Buffer.byteLength(JSON.stringify([operation])) > budget) throw Error("AIN state operation exceeds the transaction size bound");
         batch.push(operation);
+      }
+      // Removing the superseded revision rides in the header's transaction when it
+      // fits, so it commits or fails together with the CAS.
+      for (const operation of this.supersededChunks(id, previous)) {
+        if (this.fits(batch, operation)) batch.push(operation); else leftovers.push(operation);
       }
       if (batch.length) await this.chain.write(batch);
     }
@@ -121,6 +170,7 @@ export class AinStateStore {
       throw error;
     }
     this.cacheDelete(id);
+    await this.removeQuietly(leftovers);
   }
   private async change<T>(key: string, modify: (current: StateValue | null) => { state: StateValue | null; result: T; unchanged?: boolean }): Promise<T> {
     const id = this.codec.recordId(key);
@@ -211,7 +261,7 @@ export class AinStateStore {
       setEx: (key: string, seconds: number, value: string) => { operations.push({ key, seconds, value }); return pipeline; },
       exec: () => this.serialize(async () => {
         const latest = new Map(operations.map(operation => [operation.key, operation]));
-        const headers: ChainOperation[] = [], chunks: ChainOperation[] = [];
+        const headers: ChainOperation[] = [], chunks: ChainOperation[] = [], superseded: ChainOperation[] = [];
         for (const op of latest.values()) {
           if (!Number.isSafeInteger(op.seconds) || op.seconds <= 0) throw Error("Invalid state expiry");
           const id = this.codec.recordId(op.key);
@@ -219,6 +269,7 @@ export class AinStateStore {
           const sealed = this.codec.seal({ key: op.key, type: "string", value: op.value, expiresAt: this.clock() + op.seconds * 1000 });
           sealed.chunks.forEach((value, index) => chunks.push({ type: "SET_VALUE", ref: `${this.root}/chunks/${id}/${sealed.head.revision}/${index}`, value }));
           headers.push({ type: "SET_VALUE", ref: this.headPath(id), value: { ...sealed.head, previousRevision: previous?.revision ?? null } });
+          superseded.push(...this.supersededChunks(id, previous));
         }
         const budget = this.chain.operationJsonBytesLimit ?? 4500;
         // All authoritative headers must fit one native atomic SET. Oversized
@@ -233,10 +284,51 @@ export class AinStateStore {
         if (batch.length) await this.chain.write(batch);
         if (headers.length) await this.chain.write(headers);
         for (const key of latest.keys()) this.cacheDelete(this.codec.recordId(key));
+        await this.removeQuietly(superseded);
         return operations.map(() => "OK");
       }),
     };
     return pipeline;
+  }
+  /**
+   * Remove chunks that no live head points at: revisions superseded before pruning
+   * existed, removals that failed, and records whose expiry has passed (those are
+   * tombstoned first). A revision is removed only if it is still unreferenced after
+   * `graceMs`, so another process's in-flight commit — chunks confirmed, header not
+   * yet published — is never touched.
+   */
+  async sweep(options: { graceMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ records: number; expired: number; revisionsRemoved: number }> {
+    if (!this.pruneRevisions) throw Error("Install stateChunksWriteRule before sweeping: the legacy chunk rule rejects removals");
+    if (!this.chain.childLabels) throw Error("Sweeping needs a chain transport that lists child labels");
+    const list = this.chain.childLabels.bind(this.chain);
+    const graceMs = options.graceMs ?? 10 * 60 * 1000;
+    const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    const ids = await list(`${this.root}/chunks`);
+    let expired = 0;
+    const candidates = new Map<string, string[]>();
+    for (const id of ids) {
+      const { head, state } = await this.load(id);
+      if (head && !head.deleted && state && this.expired(state)) {
+        // Tombstoning goes through the normal CAS and removes the live revision too.
+        await this.serialize(() => this.commit(state.key, head, null)).then(() => { expired++; }, () => {});
+      }
+      const live = (await this.chain.get<StoredHead>(this.headPath(id)))?.revision;
+      const stale = (await list(`${this.root}/chunks/${id}`)).filter(revision => revision !== live);
+      if (stale.length) candidates.set(id, stale);
+    }
+    if (candidates.size && graceMs > 0) await sleep(graceMs);
+    let revisionsRemoved = 0;
+    for (const [id, stale] of candidates) {
+      const head = await this.chain.get<StoredHead>(this.headPath(id));
+      for (const revision of stale) {
+        if (head?.revision === revision) continue;
+        const indexes = await list(`${this.root}/chunks/${id}/${revision}`);
+        if (!indexes.length) continue;
+        await this.removeQuietly(indexes.map(index => ({ type: "SET_VALUE" as const, ref: `${this.root}/chunks/${id}/${revision}/${index}`, value: null })));
+        revisionsRemoved++;
+      }
+    }
+    return { records: ids.length, expired, revisionsRemoved };
   }
   async quit(): Promise<void> { await this.queue; this.cache.clear(); this.cacheBytes = 0; }
 }

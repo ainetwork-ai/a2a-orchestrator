@@ -8,9 +8,24 @@ Provision a dedicated application through `/manage_app/<application>/create/<tim
 
 - `/apps/<application>/state`: `{ ".rule": { "write": false } }`.
 - `state/heads/$recordId`: the expression returned by `stateHeadWriteRule(address)` in `src/storage/ain-state-store.ts`.
-- `state/chunks/$recordId/$revision/$index`: the expression returned by `stateChunksWriteRule(address)`.
+- `state/chunks/$recordId/$revision/$index`: the expression returned by `stateChunksWriteRule(address)` (write-once chunks that may be removed).
 
-Startup checks the chain identity, transaction limit, organization binding, and exact rules. The application's rules accept writes only from its dedicated service signer. Organization membership for the application API must still be enforced by its hosting gateway; native chain reads expose ciphertext, rather than readable conversations.
+Startup checks the chain identity, transaction limit, organization binding, and exact rules. Applications provisioned before revision pruning still carry `legacyStateChunksWriteRule`; the service accepts it but cannot remove anything under it.
+
+## Revision pruning and sweep
+
+Each write publishes a new revision under `chunks/<id>/<revision>/`. The revision a new header replaces is removed in the header's own transaction when it fits, otherwise right after it; deletions and tombstones remove the last revision too. Removal is cleanup: a failure never fails the acknowledged write and is picked up by the next sweep. Without this, every update and every expired cache entry stayed on chain for good, and `uncommon_gallery_orchestrator` grew to 112 MB, filling the mainnet free-tier state budget (100 MB, shared by every unstaked app) so that unstaked apps such as `baby_shark` could no longer write.
+
+Upgrade an existing application once, as its service signer:
+
+```sh
+npm run build
+AIN_STATE_CONFIG=/path/to/state.json npm run state:maintain -- upgrade-rule   # legacy → removable chunk rule
+# restart the service so it starts pruning
+AIN_STATE_CONFIG=/path/to/state.json npm run state:maintain -- sweep          # remove existing garbage
+```
+
+`sweep` tombstones expired records, then removes every revision no head points at. A revision is removed only if it is still unreferenced after `STATE_SWEEP_GRACE_MS` (default 10 minutes), so another process's commit that has confirmed its chunks but not yet its header is never touched. The application's rules accept writes only from its dedicated service signer. Organization membership for the application API must still be enforced by its hosting gateway; native chain reads expose ciphertext, rather than readable conversations.
 
 Records preserve original keys, string values, set members, IDs, and expiry inside AES-256-GCM envelopes. Organization-derived HMAC IDs hide original key names. Large records use immutable encrypted chunks; a revision header is published after the chunks are confirmed. The native header rule compares the previous revision at execution, preventing concurrent set updates from overwriting one another. Acknowledgement waits for a finalized successful native receipt. Missing chunks, authentication failures, reversion, and uncertain finality propagate as failures.
 

@@ -3,6 +3,8 @@ import Ain from "@ainblockchain/ain-js";
 export interface ChainOperation { type: "SET_VALUE" | "SET_RULE"; ref: string; value: unknown }
 export interface StateChainTransport {
   readonly operationJsonBytesLimit?: number;
+  /** Operations one native SET may carry (`set_op_list_size_limit`). */
+  readonly operationCountLimit?: number;
   get<T>(ref: string): Promise<T | null>;
   childLabels?(ref: string): Promise<string[]>;
   write(operations: ChainOperation[]): Promise<void>;
@@ -22,6 +24,7 @@ export class AinTransport implements StateChainTransport {
   private timestamp = 0;
   readonly address: string;
   readonly operationJsonBytesLimit: number;
+  readonly operationCountLimit = 50;
   constructor(private readonly config: AinTransportConfig,
     private readonly pause = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))) {
     const url = new URL(config.rpcUrl);
