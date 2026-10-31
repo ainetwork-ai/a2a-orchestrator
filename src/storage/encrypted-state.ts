@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
+import { brotliCompressSync, brotliDecompressSync, constants as zlib } from "node:zlib";
 
 export interface StateValue {
   key: string;
@@ -6,8 +7,14 @@ export interface StateValue {
   value: string | string[];
   expiresAt: number | null;
 }
+/**
+ * 1: JSON plaintext. 2: Brotli-compressed JSON. The chain bills every stored character as two bytes
+ * and chunks are base64, so each plaintext byte costs ~2.7 bytes of state; compressing text first
+ * shrinks records several times. Version 1 records stay readable and are rewritten by `compact`.
+ */
+export const STATE_VERSION = 2;
 export interface StateHead {
-  version: 1;
+  version: 1 | 2;
   revision: string;
   chunks: number;
   sha256: string;
@@ -36,21 +43,24 @@ export class EncryptedStateCodec {
     if (!key) throw Error("State key must not be empty");
     return createHmac("sha256", this.indexKey).update(key).digest("hex");
   }
-  private aad(recordId: string, revision: string): Buffer {
-    return Buffer.from(JSON.stringify([1, this.organization, recordId, revision]));
+  private aad(version: number, recordId: string, revision: string): Buffer {
+    return Buffer.from(JSON.stringify([version, this.organization, recordId, revision]));
   }
-  seal(state: StateValue): SealedState {
+  /** `version` exists so tests can produce records in the old encoding. */
+  seal(state: StateValue, version: StateHead["version"] = STATE_VERSION): SealedState {
     this.validate(state);
-    const plaintext = Buffer.from(JSON.stringify(state));
-    if (plaintext.length > MAX_BYTES) throw Error("State value exceeds the encryption size limit");
+    const json = Buffer.from(JSON.stringify(state));
+    if (json.length > MAX_BYTES) throw Error("State value exceeds the encryption size limit");
+    const plaintext = version === 1 ? json : brotliCompressSync(json, { params: {
+      [zlib.BROTLI_PARAM_MODE]: zlib.BROTLI_MODE_TEXT, [zlib.BROTLI_PARAM_QUALITY]: 9, [zlib.BROTLI_PARAM_SIZE_HINT]: json.length } });
     const recordId = this.recordId(state.key), revision = randomBytes(16).toString("hex"), nonce = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, nonce);
-    cipher.setAAD(this.aad(recordId, revision));
+    cipher.setAAD(this.aad(version, recordId, revision));
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const envelope = Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]);
     const chunks: string[] = [];
     for (let i = 0; i < envelope.length; i += CHUNK_BYTES) chunks.push(envelope.subarray(i, i + CHUNK_BYTES).toString("base64"));
-    return { recordId, head: { version: 1, revision, chunks: chunks.length, sha256: digest(envelope) }, chunks };
+    return { recordId, head: { version, revision, chunks: chunks.length, sha256: digest(envelope) }, chunks };
   }
   open(key: string, head: StateHead, chunks: string[]): StateValue {
     const state = this.openRecord(this.recordId(key), head, chunks);
@@ -59,7 +69,7 @@ export class EncryptedStateCodec {
   }
   openRecord(recordId: string, head: StateHead, chunks: string[]): StateValue {
     if (!/^[a-f0-9]{64}$/.test(recordId)) throw Error("Invalid encrypted state record ID");
-    if (head.version !== 1 || !/^[a-f0-9]{32}$/.test(head.revision) || !/^[a-f0-9]{64}$/.test(head.sha256)
+    if ((head.version !== 1 && head.version !== 2) || !/^[a-f0-9]{32}$/.test(head.revision) || !/^[a-f0-9]{64}$/.test(head.sha256)
       || !Number.isInteger(head.chunks) || head.chunks < 1 || head.chunks > Math.ceil((MAX_BYTES + 28) / CHUNK_BYTES)
       || chunks.length !== head.chunks) throw Error("Invalid encrypted state header");
     const buffers = chunks.map((chunk, i) => {
@@ -71,10 +81,11 @@ export class EncryptedStateCodec {
     const envelope = Buffer.concat(buffers);
     if (envelope.length < 28 || envelope.length > MAX_BYTES + 28 || digest(envelope) !== head.sha256) throw Error("Encrypted state chunks are incomplete or corrupt");
     const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, envelope.subarray(0, 12));
-    decipher.setAAD(this.aad(recordId, head.revision));
+    decipher.setAAD(this.aad(head.version, recordId, head.revision));
     decipher.setAuthTag(envelope.subarray(12, 28));
     const plaintext = Buffer.concat([decipher.update(envelope.subarray(28)), decipher.final()]);
-    const state: StateValue = JSON.parse(plaintext.toString("utf8"));
+    const json = head.version === 1 ? plaintext : brotliDecompressSync(plaintext, { maxOutputLength: MAX_BYTES });
+    const state: StateValue = JSON.parse(json.toString("utf8"));
     this.validate(state);
     if (this.recordId(state.key) !== recordId) throw Error("Encrypted state key mismatch");
     return state;

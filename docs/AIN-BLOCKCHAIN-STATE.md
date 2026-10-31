@@ -27,6 +27,12 @@ AIN_STATE_CONFIG=/path/to/state.json npm run state:maintain -- sweep          # 
 
 `sweep` tombstones expired records, then removes every revision no head points at. A revision is removed only if it is still unreferenced after `STATE_SWEEP_GRACE_MS` (default 10 minutes), so another process's commit that has confirmed its chunks but not yet its header is never touched. The application's rules accept writes only from its dedicated service signer. Organization membership for the application API must still be enforced by its hosting gateway; native chain reads expose ciphertext, rather than readable conversations.
 
+## Keeping state small
+
+The chain bills every stored character as two bytes, and chunks are base64, so an uncompressed byte costs about 2.7 bytes of state. Records are therefore Brotli-compressed before encryption (header `version: 2`); text shrinks about 3.7× on the production data. Version 1 records remain readable; rewrite them once with `npm run state:maintain -- compact`.
+
+Keep caches and derived data off chain. Message embeddings used to be cached here (a 1536-float vector is ~160 KB of state) and now live in an in-process LRU (`EMBEDDING_CACHE_ENTRIES`, default 5000). Remove the old entries with `npm run state:maintain -- delete 'emb:msg:*'`.
+
 Records preserve original keys, string values, set members, IDs, and expiry inside AES-256-GCM envelopes. Organization-derived HMAC IDs hide original key names. Large records use immutable encrypted chunks; a revision header is published after the chunks are confirmed. The native header rule compares the previous revision at execution, preventing concurrent set updates from overwriting one another. Acknowledgement waits for a finalized successful native receipt. Missing chunks, authentication failures, reversion, and uncertain finality propagate as failures.
 
 The existing string/set/cache operations use the selected state adapter. `multi().setEx().exec()` publishes all cache headers in one native atomic transaction; an oversized batch fails before authoritative changes. Thread and ingest endpoints await persistence, preserve caller IDs, and report Blockchain failures instead of acknowledging uncommitted state. Agent memory remains on AIN Drive; readable report publication to Ainmem is a separate integration.

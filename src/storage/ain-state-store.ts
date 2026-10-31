@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { EncryptedStateCodec, StateHead, StateValue } from "./encrypted-state";
+import { EncryptedStateCodec, STATE_VERSION, StateHead, StateValue } from "./encrypted-state";
 import { AinWriteRejected, ChainOperation, StateChainTransport } from "./ain-transport";
 
 interface StoredHead extends StateHead { previousRevision: string | null; deleted?: boolean }
@@ -329,6 +329,29 @@ export class AinStateStore {
       }
     }
     return { records: ids.length, expired, revisionsRemoved };
+  }
+  /**
+   * Rewrite every live record stored in an older encoding (uncompressed version 1) in the current
+   * one. Each rewrite is a normal CAS commit that also removes the old revision, so it is safe while
+   * the service runs; a record changed concurrently is simply left for the service's own write.
+   */
+  async compact(): Promise<{ records: number; rewritten: number; failed: number }> {
+    if (!this.chain.childLabels) throw Error("Compacting needs a chain transport that lists child labels");
+    const ids = await this.chain.childLabels(`${this.root}/heads`);
+    let rewritten = 0, failed = 0;
+    for (const id of ids) {
+      const head = await this.chain.get<StoredHead>(this.headPath(id));
+      if (!head || head.deleted || head.version === STATE_VERSION) continue;
+      try {
+        const { state } = await this.read(id);
+        if (!state) continue; // expired: sweep() removes it
+        await this.serialize(() => this.change(state.key, current => current
+          ? { state: current, result: undefined }
+          : { state: null, result: undefined, unchanged: true }));
+        rewritten++;
+      } catch { failed++; }
+    }
+    return { records: ids.length, rewritten, failed };
   }
   async quit(): Promise<void> { await this.queue; this.cache.clear(); this.cacheBytes = 0; }
 }

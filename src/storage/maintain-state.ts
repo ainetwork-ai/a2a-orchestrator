@@ -7,6 +7,8 @@ import { createAinStateStore } from "./config";
  * Maintenance for the Blockchain state application:
  *   upgrade-rule  replace the legacy chunk rule with one that allows removing superseded revisions
  *   sweep         remove chunks no live head points at (run after upgrade-rule)
+ *   compact       rewrite records stored uncompressed (version 1) in the current compressed encoding
+ *   delete <glob> delete every record whose key matches, e.g. a cache that no longer belongs on chain
  * Both read AIN_STATE_CONFIG, the same private file the service uses.
  */
 async function main(command: string | undefined): Promise<void> {
@@ -30,7 +32,22 @@ async function main(command: string | undefined): Promise<void> {
     await store.quit();
     return;
   }
-  throw Error("usage: maintain-state upgrade-rule | sweep");
+  if (command === "compact") {
+    const store = await createAinStateStore(path);
+    console.log(JSON.stringify(await store.compact()));
+    await store.quit();
+    return;
+  }
+  if (command === "delete") {
+    const pattern = process.argv[3];
+    if (!pattern || pattern === "*") throw Error("delete needs a key pattern narrower than *");
+    const store = await createAinStateStore(path);
+    const keys = await store.keys(pattern);
+    console.log(JSON.stringify({ pattern, matched: keys.length, deleted: keys.length ? await store.del(keys) : 0 }));
+    await store.quit();
+    return;
+  }
+  throw Error("usage: maintain-state upgrade-rule | sweep | compact | delete <pattern>");
 }
 
 main(process.argv[2]).catch(error => {

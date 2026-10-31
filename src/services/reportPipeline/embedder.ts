@@ -1,12 +1,16 @@
 /**
  * Embedder for TRD 12: Embedding-based Clustering Pipeline
  *
- * Generates embeddings for messages using OpenAI or Azure OpenAI
- * with Redis caching for efficiency.
+ * Generates embeddings for messages using OpenAI or Azure OpenAI,
+ * cached in process memory.
+ *
+ * The cache deliberately stays off the state store: organization state lives on
+ * AIN Blockchain, where a 1536-float vector costs ~160 KB of state and a single
+ * large report could exhaust the free-tier state budget shared by every app.
+ * Embeddings are cheap to recompute; a restart only costs one re-embedding pass.
  */
 
 import crypto from "crypto";
-import { getStateClient } from "../../utils/state";
 import { ParsedMessage } from "../../types/report";
 import {
   EmbeddedMessage,
@@ -68,6 +72,26 @@ export function createAzureOpenAIEmbedder(config: AzureOpenAIConfig): EmbedFunct
   };
 }
 
+/** Least-recently-used embedding cache keyed by content hash. */
+const embeddingCache = new Map<string, Float32Array>();
+const cacheEntries = () => Number(process.env.EMBEDDING_CACHE_ENTRIES ?? EMBEDDING_CONFIG.cacheEntries);
+function cacheGet(hash: string): number[] | null {
+  const vector = embeddingCache.get(hash);
+  if (!vector) return null;
+  embeddingCache.delete(hash);
+  embeddingCache.set(hash, vector);
+  return Array.from(vector);
+}
+function cacheSet(hash: string, embedding: number[]): void {
+  embeddingCache.delete(hash);
+  embeddingCache.set(hash, Float32Array.from(embedding));
+  for (const oldest of embeddingCache.keys()) {
+    if (embeddingCache.size <= cacheEntries()) break;
+    embeddingCache.delete(oldest);
+  }
+}
+export function clearEmbeddingCache(): void { embeddingCache.clear(); }
+
 /**
  * Generate SHA256 hash of content (first 16 characters)
  */
@@ -76,7 +100,7 @@ export function hashContent(content: string): string {
 }
 
 /**
- * Generate embeddings for messages with Redis caching
+ * Generate embeddings for messages, reusing cached vectors
  *
  * @param messages - Messages to embed
  * @param embedFn - Function to generate embeddings (dependency injection)
@@ -94,30 +118,18 @@ export async function embedMessages(
     };
   }
 
-  const redis = getStateClient();
   const results: EmbeddedMessage[] = new Array(messages.length);
   const toEmbed: { index: number; message: ParsedMessage; hash: string }[] = [];
   let cacheHits = 0;
 
   // Generate hashes for all messages
   const hashes = messages.map((msg) => hashContent(msg.content));
-  const cacheKeys = hashes.map((h) => `${EMBEDDING_CONFIG.cachePrefix}${h}`);
 
-  // Batch cache lookup using mGet
-  const cachedValues = await redis.mGet(cacheKeys);
-
-  // Process cache results
   for (let i = 0; i < messages.length; i++) {
-    const cached = cachedValues[i];
-    if (cached) {
-      try {
-        const embedding = JSON.parse(cached) as number[];
-        results[i] = { ...messages[i], embedding };
-        cacheHits++;
-      } catch {
-        // Invalid cache entry, re-embed
-        toEmbed.push({ index: i, message: messages[i], hash: hashes[i] });
-      }
+    const embedding = cacheGet(hashes[i]);
+    if (embedding) {
+      results[i] = { ...messages[i], embedding };
+      cacheHits++;
     } else {
       toEmbed.push({ index: i, message: messages[i], hash: hashes[i] });
     }
@@ -140,21 +152,12 @@ export async function embedMessages(
     try {
       const embeddings = await embedFn(texts);
 
-      // Store results and prepare cache entries
-      const pipeline = redis.multi();
       for (let j = 0; j < batch.length; j++) {
         const { index, message, hash } = batch[j];
         const embedding = embeddings[j];
-
         results[index] = { ...message, embedding };
-
-        // Add to cache pipeline
-        const cacheKey = `${EMBEDDING_CONFIG.cachePrefix}${hash}`;
-        pipeline.setEx(cacheKey, EMBEDDING_CONFIG.cacheTTLSeconds, JSON.stringify(embedding));
+        cacheSet(hash, embedding);
       }
-
-      // Execute cache writes in batch
-      await pipeline.exec();
     } catch (error) {
       console.error(`[Embedder] Error embedding batch ${batchNum}:`, error);
       throw error;
