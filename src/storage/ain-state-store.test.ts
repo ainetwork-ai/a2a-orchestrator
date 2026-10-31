@@ -10,6 +10,10 @@ class TestChain implements StateChainTransport {
   rejectChunks = false;
   unconfirmed = false;
   rejectHeadId: string | null = null;
+  legacyChunkRule = false;
+  async childLabels(ref: string): Promise<string[]> {
+    return [...new Set([...this.values.keys()].filter(key => key.startsWith(ref + "/")).map(key => key.slice(ref.length + 1).split("/")[0]))];
+  }
   async get<T>(ref: string): Promise<T | null> {
     if (ref.endsWith("/heads")) return Object.fromEntries([...this.values].filter(([key]) => key.startsWith(ref + "/")).map(([key, value]) => [key.slice(ref.length + 1), value])) as T;
     return this.values.has(ref) ? structuredClone(this.values.get(ref)) as T : null;
@@ -23,6 +27,8 @@ class TestChain implements StateChainTransport {
         const after = op.value as { previousRevision: string | null };
         if (after.previousRevision !== (before?.revision ?? null)) throw new AinWriteRejected("CAS rejected");
       } else if (this.rejectChunks) throw Error("Chunk confirmation failed");
+      else if (op.value === null && this.legacyChunkRule) throw new AinWriteRejected("Legacy chunk rule rejects removal");
+      if (op.value === null) { for (const key of [...draft.keys()]) if (key === op.ref || key.startsWith(op.ref + "/")) draft.delete(key); continue; }
       draft.set(op.ref, structuredClone(op.value));
     }
     this.values = draft;
@@ -171,4 +177,72 @@ test("setNX writes only absent keys, including against a competing process", asy
   await store.set("report:summary:c", "fresh");
   await store.del("report:summary:c");
   assert.equal(await store.setNX("report:summary:c", "after-delete"), true);
+});
+
+const revisionsOf = (chain: TestChain, id: string) => chain.childLabels(`${root}/chunks/${id}`);
+
+test("updating or deleting a record removes the revision it replaced", async () => {
+  const { chain, codec, store } = setup();
+  const id = codec.recordId("thread:a");
+  await store.set("thread:a", "x".repeat(10000));
+  await store.set("thread:a", "y".repeat(10000));
+  await store.sAdd("threads", ["a"]);
+  await store.set("thread:a", "z");
+  const head = await chain.get<{ revision: string }>(`${root}/heads/${id}`);
+  assert.deepEqual(await revisionsOf(chain, id), [head!.revision], "only the live revision keeps chunks");
+  assert.equal(await store.get("thread:a"), "z");
+  await store.del("thread:a");
+  assert.deepEqual(await revisionsOf(chain, id), []);
+  await store.multi().setEx("cache:a", 50, "1").exec();
+  await store.multi().setEx("cache:a", 50, "2").exec();
+  assert.equal((await revisionsOf(chain, codec.recordId("cache:a"))).length, 1, "the cache pipeline prunes too");
+});
+
+test("with the legacy chunk rule nothing is removed and writes keep working", async () => {
+  const { chain, codec } = setup();
+  chain.legacyChunkRule = true;
+  const store = new AinStateStore(chain, codec, root, Date.now, undefined, false);
+  await store.set("thread:a", "1");
+  await store.set("thread:a", "2");
+  assert.equal((await revisionsOf(chain, codec.recordId("thread:a"))).length, 2);
+  assert.equal(await store.get("thread:a"), "2");
+  await assert.rejects(store.sweep({ graceMs: 0 }), /legacy chunk rule/);
+});
+
+test("a reader whose revision is pruned underneath it rereads the new head", async () => {
+  const { chain, codec, store } = setup();
+  await store.set("thread:a", "old");
+  const reader = new AinStateStore(chain, codec, root);
+  const originalGet = chain.get.bind(chain);
+  let raced = false;
+  chain.get = async <T>(ref: string): Promise<T | null> => {
+    if (!raced && ref.includes("/chunks/")) { raced = true; await store.set("thread:a", "new"); }
+    return originalGet<T>(ref);
+  };
+  assert.equal(await reader.get("thread:a"), "new");
+});
+
+test("sweep removes superseded and expired revisions but not an in-flight commit", async () => {
+  const { chain, codec, advance } = setup();
+  chain.legacyChunkRule = true;
+  let now = 1000;
+  const legacy = new AinStateStore(chain, codec, root, () => now, undefined, false);
+  await legacy.set("thread:a", "1"); await legacy.set("thread:a", "2"); await legacy.set("thread:a", "3");
+  await legacy.setEx("cache:a", 1, "temporary");
+  await legacy.set("thread:b", "live");
+  chain.legacyChunkRule = false;
+  const store = new AinStateStore(chain, codec, root, () => now);
+  now += 2000; advance(0);
+  // Another process has confirmed chunks for its next revision but not its header yet.
+  const inflight = `${root}/chunks/${codec.recordId("thread:b")}/${"f".repeat(32)}/0`;
+  let finished = false;
+  const result = await store.sweep({ graceMs: 1, sleep: async () => { chain.values.set(inflight, "AAAA"); finished = true; } });
+  assert.ok(finished);
+  assert.deepEqual(result, { records: 3, expired: 1, revisionsRemoved: 2 });
+  assert.equal((await revisionsOf(chain, codec.recordId("thread:a"))).length, 1);
+  assert.deepEqual(await revisionsOf(chain, codec.recordId("cache:a")), []);
+  assert.ok(chain.values.has(inflight), "a revision that appeared during the grace period is left alone");
+  assert.equal(await store.get("thread:a"), "3");
+  assert.equal(await store.get("thread:b"), "live");
+  assert.equal(await store.get("cache:a"), null);
 });
