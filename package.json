@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "lint": "eslint src --ext .ts",
-    "state:maintain": "node dist/storage/maintain-state.js"
+    "state:maintain": "node dist/storage/maintain-state.js",
+    "state:migrate": "node dist/storage/migrate-to-store.js",
+    "state:cleanup": "node dist/storage/cleanup-chain-state.js"
   },
   "keywords": [],
   "author": "",
@@ -30,5 +32,9 @@
     "@types/uuid": "^10.0.0",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
+  },
+  "optionalDependencies": {
+    "@ainize/store": "file:vendor/ainize-store-0.1.0.tgz",
+    "@ainize/store-core": "file:vendor/ainize-store-core-0.1.0.tgz"
   }
 }

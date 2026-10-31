@@ -1,0 +1,30 @@
+{
+  "app": "uncommon_gallery_orchestrator",
+  "dataDir": "/data",
+  "chain": {
+    "rpcUrl": "https://mainnet-api.ainetwork.ai/json-rpc",
+    "protoVer": "1.6.1",
+    "chainId": 1,
+    "startBlock": "SET_ME: the ain_store activation block (or the block before the first state write)",
+    "pollMs": 3000,
+    "batchBlocks": 20,
+    "gasPrice": 0
+  },
+  "storage": {
+    "kind": "aindrive",
+    "baseUrl": "https://aindrive.ainetwork.ai",
+    "driveId": "SET_ME: the comcom organization drive id",
+    "prefix": "store/uncommon_gallery_orchestrator",
+    "tokenEnv": "AINDRIVE_TOKEN"
+  },
+  "collections": {
+    "threads": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" },
+    "messages": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" },
+    "reports": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" },
+    "meta": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" }
+  },
+  "state": { "enabled": true, "everyWrites": 100, "everyMs": 300000, "serviceKeyEnv": "AIN_STORE_SERVICE_KEY" },
+  "archive": { "segmentSize": 1024, "flushMs": 10000 },
+  "http": { "port": 8080, "host": "0.0.0.0", "corsOrigins": [] },
+  "auth": { "sessions": false, "serviceTokenEnv": "AIN_STORE_SERVICE_TOKEN" }
+}
