@@ -49,7 +49,8 @@ export const EMBEDDING_CONFIG = {
   model: "text-embedding-3-small",
   dimensions: 1536,
   batchSize: 100,
-  cacheTTLSeconds: 30 * 24 * 60 * 60, // 30 days
+  cacheEntries: 5000, // in-memory LRU, ~6 KB per vector; override with EMBEDDING_CACHE_ENTRIES
+  /** Key prefix of the old on-chain cache; remove leftovers with `state:maintain delete 'emb:msg:*'`. */
   cachePrefix: "emb:msg:",
 } as const;
 

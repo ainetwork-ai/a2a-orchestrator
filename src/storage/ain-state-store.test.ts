@@ -246,3 +246,18 @@ test("sweep removes superseded and expired revisions but not an in-flight commit
   assert.equal(await store.get("thread:b"), "live");
   assert.equal(await store.get("cache:a"), null);
 });
+test("compact rewrites old uncompressed records in place and removes their old revisions", async () => {
+  const { chain, codec, store } = setup();
+  const legacy = { key: "messages:old", type: "string" as const, value: "오래된 대화 ".repeat(2000), expiresAt: null };
+  const sealed = codec.seal(legacy, 1);
+  sealed.chunks.forEach((chunk, index) => chain.values.set(`${root}/chunks/${sealed.recordId}/${sealed.head.revision}/${index}`, chunk));
+  chain.values.set(`${root}/heads/${sealed.recordId}`, { ...sealed.head, previousRevision: null });
+  await store.set("thread:new", "already compressed");
+  const before = [...chain.values.values()].filter(value => typeof value === "string").join("").length;
+  assert.deepEqual(await store.compact(), { records: 2, rewritten: 1, failed: 0 });
+  assert.equal((await chain.get<{ version: number }>(`${root}/heads/${sealed.recordId}`))?.version, 2);
+  assert.deepEqual(await chain.childLabels(`${root}/chunks/${sealed.recordId}`), [(await chain.get<{ revision: string }>(`${root}/heads/${sealed.recordId}`))!.revision]);
+  assert.ok([...chain.values.values()].filter(value => typeof value === "string").join("").length * 4 < before);
+  assert.equal(await new AinStateStore(chain, codec, root).get("messages:old"), legacy.value);
+  assert.deepEqual(await store.compact(), { records: 2, rewritten: 0, failed: 0 });
+});
