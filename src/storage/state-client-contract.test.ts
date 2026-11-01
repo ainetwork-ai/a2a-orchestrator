@@ -8,7 +8,7 @@ import { EncryptedStateCodec } from "./encrypted-state";
 import { TestChain } from "./ain-test-chain";
 import type { StateClient } from "./state-client";
 import { DevStore, ainStoreAvailable, startDevStore } from "./ain-store-dev-server";
-import { collectionsFor, docToKey, keyToDoc } from "./ain-store-state-client";
+import { ainStoreStateClient, collectionsFor, docToKey, keyToDoc } from "./ain-store-state-client";
 
 /**
  * The StateClient contract the app relies on, run against every backend: the encrypted chain
@@ -136,7 +136,7 @@ describe("AIN Store backend", { skip }, () => {
   before(async () => { dev = await startDevStore(); });
   after(async () => { await dev?.stop(); });
 
-  test("the chain sees only HMAC ids and body hashes; bodies live on the drive", async () => {
+  test("the chain sees only HMAC ids and body hashes; bodies live encrypted on the drive", async () => {
     const store = dev.client();
     const secret = "secret conversation " + randomBytes(8).toString("hex");
     await store.set("thread:privacy-check", secret);
@@ -145,15 +145,33 @@ describe("AIN Store backend", { skip }, () => {
     assert.ok(!onChain.includes("privacy-check"), "no plain key or id on chain");
     assert.ok(!onChain.includes(secret), "no value on chain");
     for (const tx of dev.chain.transactions) for (const operation of tx.tx_body.operation.op_list ?? [tx.tx_body.operation]) {
-      if (operation.ref.includes("/writes/")) {
+      if (operation.type === "SET_VALUE" && /\/writes\/[a-z_]+\/[0-9A-Za-z_-]{20}$/.test(operation.ref)) {
         assert.match(operation.value.id, /^[0-9a-f]{64}$/);
         assert.equal(operation.value.v, undefined, "no inline value");
       }
     }
     // The only chain state the Store keeps is its MMR (and, when posting, its state root).
     assert.deepEqual([...dev.chain.values.keys()], ["/apps/uncommon_gallery_orchestrator/store/mmr"]);
-    const files = walk(dev.driveRoot).map(file => readFileSync(file, "utf8"));
-    assert.ok(files.some(body => body.includes(secret)), "the body is on the drive");
+    // Bodies are on the drive, salted and encrypted at rest (AES-256-GCM under the collection key).
+    const files = walk(dev.driveRoot).map(file => readFileSync(file));
+    assert.ok(files.length >= 2, "bodies are on the drive");
+    assert.ok(!files.some(body => body.includes(secret) || body.includes("privacy-check")), "no plaintext body on the drive");
+    assert.equal(await dev.client().get("thread:privacy-check"), secret);
+  });
+
+  test("private record ids are the domain-separated HMAC, and the SDK refuses any other id", async () => {
+    const { privateId } = require("@ainize/store-core") as { privateId(key: string, app: string, collection: string, id: string): string };
+    const store = dev.client();
+    const before = dev.chain.transactions.length;
+    await store.set("thread:hmac-check", "v");
+    const op = dev.chain.transactions[before].tx_body.operation;
+    const record = (op.op_list ?? [op])[0];
+    assert.match(record.ref, /\/writes\/threads\//);
+    assert.equal(record.value.id, privateId(dev.hmacKey, "uncommon_gallery_orchestrator", "threads", "hmac-check"));
+    const wrongKey = ainStoreStateClient({ url: dev.url, app: "uncommon_gallery_orchestrator", chainId: 0, writerKey: dev.writerKey, serviceToken: dev.serviceToken, hmacKey: randomBytes(32).toString("hex"), writeTimeoutMs: 5000 }, dev.sdk);
+    await assert.rejects(wrongKey.set("thread:hmac-check", "forged"));
+    assert.equal(dev.chain.transactions.length, before + 1, "nothing was signed or sent");
+    assert.equal(await store.get("thread:hmac-check"), "v");
   });
 
   test("writes signed by any other key are refused by the chain rule and change nothing", async () => {

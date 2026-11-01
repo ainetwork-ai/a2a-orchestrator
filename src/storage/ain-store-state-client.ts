@@ -41,7 +41,11 @@ export interface StoreWriteBatch {
   commit(): Promise<unknown>;
 }
 export interface Store { collection(name: string): StoreCollectionRef; batch(): StoreWriteBatch }
-export interface StoreOptions { url: string; app: string; getToken?: () => string | null; signer?: unknown; writeTimeoutMs?: number; fetch?: typeof fetch }
+export interface StoreOptions {
+  url: string; app: string; getToken?: () => string | null; signer?: unknown; writeTimeoutMs?: number; fetch?: typeof fetch;
+  /** Private collections; with `hmacKey` the SDK checks that the Store prepared the exact HMAC record id. */
+  privateCollections?: Record<string, { hmacKey?: string }>;
+}
 export interface StoreSdk {
   createStore(options: StoreOptions): Store;
   privateKeySigner(privateKeyHex: string, chainId: number): unknown;
@@ -141,7 +145,10 @@ export class AinStoreStateClient implements StateClient {
     return run;
   }
 
-  /** The stored record, expired or not, with the document version to use as `base`. */
+  /**
+   * The stored record, expired or not, with the document version to use as `base`. A deleted
+   * document reads as absent but keeps its tombstone version (> 0), which the next create must use.
+   */
   private async load(key: string): Promise<{ version: number; state: StateValue | null }> {
     const snapshot = await this.ref(this.reader, key).get();
     return { version: snapshot.version, state: snapshot.exists ? decode(key, snapshot.data()) : null };
@@ -157,7 +164,7 @@ export class AinStoreStateClient implements StateClient {
         const ref = this.ref(this.writer, key);
         try {
           if (change.state) await ref.set(encode(change.state), { ifVersion: stored.version });
-          else if (stored.version > 0) await ref.delete({ ifVersion: stored.version });
+          else if (stored.state) await ref.delete({ ifVersion: stored.version });
           return change.result;
         } catch (error) {
           if (!isConflict(error) || attempt >= this.retries) throw error;
@@ -226,7 +233,7 @@ export class AinStoreStateClient implements StateClient {
     let removed = 0;
     for (const key of typeof keys === "string" ? [keys] : keys) {
       // An expired document still exists in the Store; remove it, but it does not count (as in Redis).
-      removed += await this.change(key, (current, stored) => ({ result: current ? 1 : 0, state: null, unchanged: stored.version === 0 }));
+      removed += await this.change(key, (current, stored) => ({ result: current ? 1 : 0, state: null, unchanged: !stored.state }));
     }
     return removed;
   }
@@ -295,7 +302,7 @@ export class AinStoreStateClient implements StateClient {
       for await (const state of this.scanCollection(collection, true)) if (this.expired(state)) expired.push(state.key);
       for (const key of expired) {
         // Rewritten since the scan (current is live again) or already gone: leave it.
-        removed += await this.change(key, (current, stored) => ({ result: current || stored.version === 0 ? 0 : 1, state: null, unchanged: !!current || stored.version === 0 }));
+        removed += await this.change(key, (current, stored) => ({ result: current || !stored.state ? 0 : 1, state: null, unchanged: !!current || !stored.state }));
       }
     }
     return removed;
@@ -303,13 +310,14 @@ export class AinStoreStateClient implements StateClient {
 }
 
 /**
- * Chain write rule for each state collection: only the orchestrator's writer key may write, with
- * the Store's record shape and a 64-hex HMAC id (private collections never put plain ids on chain).
+ * Chain write rule for each state collection: only the orchestrator's writer address may write,
+ * with the Store's record shape (`compileServiceOnlyRule` from @ainize/store-core, `checkShape`).
  */
-export function stateCollectionWriteRule(address: string): string {
-  if (!/^0x[a-fA-F0-9]{40}$/.test(address)) throw Error("Invalid AIN Store writer address");
-  return `auth.addr === '${address}' && util.isDict(newData) && ['set','merge','delete'].includes(newData.op) && util.isString(newData.id) && newData.id.length === 64 && util.isInteger(newData.base) && newData.base >= 0 && util.isString(newData.h)`;
+export function stateCollectionWriteRule(address: string, core: StoreCore = loadCore()): string {
+  return core.compileServiceOnlyRule({ serviceAddress: address, checkShape: true });
 }
+
+export interface StoreCore { compileServiceOnlyRule(options: { serviceAddress: string; checkShape?: boolean }): string; storeAppendFunctionConfig(): Record<string, unknown> }
 
 export interface AinStoreStateConfig {
   /** Store service base URL of this project's Store. */
@@ -322,6 +330,12 @@ export interface AinStoreStateConfig {
   writerKey: string;
   /** The Store's service bearer token: reads private collections and prepares writes. */
   serviceToken: string;
+  /**
+   * The Store's HMAC key for the state collections (its AIN_STORE_STATE_HMAC_KEY). The SDK uses it to
+   * compute the exact private record ids (`HMAC(key, "ain-store:v1:<app>:<collection>:<id>")`) and
+   * refuses a prepared write for any other id.
+   */
+  hmacKey: string;
   writeTimeoutMs?: number;
 }
 
@@ -335,6 +349,7 @@ export function readAinStoreStateConfig(path: string): AinStoreStateConfig {
   if (!url || !/^https?:$/.test(url.protocol) || url.username || url.password
     || !/^[a-z][a-z0-9_]*$/i.test(config.app ?? "") || !Number.isSafeInteger(config.chainId) || config.chainId < 0
     || !/^(0x)?[a-fA-F0-9]{64}$/.test(config.writerKey ?? "") || typeof config.serviceToken !== "string" || config.serviceToken.length < 16
+    || typeof config.hmacKey !== "string" || config.hmacKey.length < 32
     || (config.writeTimeoutMs !== undefined && (!Number.isSafeInteger(config.writeTimeoutMs) || config.writeTimeoutMs <= 0))) throw Error("Invalid AIN Store state configuration");
   return config;
 }
@@ -342,9 +357,10 @@ export function readAinStoreStateConfig(path: string): AinStoreStateConfig {
 /** Build the client from a config; `sdk` is injectable for tests (defaults to `@ainize/store`). */
 export function ainStoreStateClient(config: AinStoreStateConfig, sdk: StoreSdk = loadSdk(), extra: Partial<StoreOptions> = {}, clock?: () => number): AinStoreStateClient {
   const getToken = () => config.serviceToken;
-  const reader = sdk.createStore({ url: config.url, app: config.app, getToken, ...extra });
+  const privateCollections = Object.fromEntries(STATE_COLLECTIONS.map(name => [name, { hmacKey: config.hmacKey }]));
+  const reader = sdk.createStore({ url: config.url, app: config.app, getToken, privateCollections, ...extra });
   const writer = sdk.createStore({
-    url: config.url, app: config.app, getToken, writeTimeoutMs: config.writeTimeoutMs ?? 120_000, ...extra,
+    url: config.url, app: config.app, getToken, privateCollections, writeTimeoutMs: config.writeTimeoutMs ?? 120_000, ...extra,
     signer: sdk.privateKeySigner(config.writerKey.replace(/^0x/, ""), config.chainId),
   });
   return new AinStoreStateClient({ reader, writer, clock });
@@ -355,6 +371,15 @@ export async function createAinStoreStateClient(path: string): Promise<AinStoreS
   // Fail at startup, not on the first request, if the Store is unreachable or refuses the token.
   await client.exists("orchestrator:agents");
   return client;
+}
+
+export function loadCore(): StoreCore {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("@ainize/store-core") as StoreCore;
+  } catch (error) {
+    throw Error("The AIN Store tools need @ainize/store-core (optional dependency in vendor/): " + (error instanceof Error ? error.message : "load failed"));
+  }
 }
 
 // Loaded on demand so the chain backend never needs the SDK. The package is ESM; Node 22.12+ can require it.

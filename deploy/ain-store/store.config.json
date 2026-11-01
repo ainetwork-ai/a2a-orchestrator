@@ -1,11 +1,15 @@
 {
   "app": "uncommon_gallery_orchestrator",
-  "dataDir": "/data",
+  "database": { "urlEnv": "DATABASE_URL" },
   "chain": {
     "rpcUrl": "https://mainnet-api.ainetwork.ai/json-rpc",
     "protoVer": "1.6.1",
     "chainId": 1,
-    "startBlock": "SET_ME: the ain_store activation block (or the block before the first state write)",
+    "startBlock": 1587800,
+    "activationBlock": 1586503,
+    "functionSeed": "empty",
+    "resolveWriters": true,
+    "trustedSigners": [],
     "pollMs": 3000,
     "batchBlocks": 20,
     "gasPrice": 0
@@ -15,16 +19,21 @@
     "baseUrl": "https://aindrive.ainetwork.ai",
     "driveId": "SET_ME: the comcom organization drive id",
     "prefix": "store/uncommon_gallery_orchestrator",
-    "tokenEnv": "AINDRIVE_TOKEN"
+    "oauth": {
+      "clientId": "SET_ME: the AinDrive OAuth client id registered for this Store",
+      "refreshTokenEnv": "AINDRIVE_REFRESH_TOKEN",
+      "tokenKeyEnv": "AIN_STORE_TOKEN_KEY"
+    }
   },
   "collections": {
-    "threads": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" },
-    "messages": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" },
-    "reports": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" },
-    "meta": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY" }, "read": "none" }
+    "threads": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY", "encryptKeyEnv": "AIN_STORE_STATE_ENCRYPT_KEY", "previousEncryptKeyEnvs": [] }, "read": "none" },
+    "messages": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY", "encryptKeyEnv": "AIN_STORE_STATE_ENCRYPT_KEY", "previousEncryptKeyEnvs": [] }, "read": "none" },
+    "reports": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY", "encryptKeyEnv": "AIN_STORE_STATE_ENCRYPT_KEY", "previousEncryptKeyEnvs": [] }, "read": "none" },
+    "meta": { "private": { "hmacKeyEnv": "AIN_STORE_STATE_HMAC_KEY", "encryptKeyEnv": "AIN_STORE_STATE_ENCRYPT_KEY", "previousEncryptKeyEnvs": [] }, "read": "none" }
   },
   "state": { "enabled": true, "everyWrites": 100, "everyMs": 300000, "serviceKeyEnv": "AIN_STORE_SERVICE_KEY" },
   "archive": { "segmentSize": 1024, "flushMs": 10000 },
-  "http": { "port": 8080, "host": "0.0.0.0", "corsOrigins": [] },
+  "monitor": { "intervalMs": 300000, "webhookUrlEnv": "AIN_STORE_ALERT_WEBHOOK_URL" },
+  "http": { "port": 8080, "host": "0.0.0.0", "corsOrigins": [], "trustProxy": true },
   "auth": { "sessions": false, "serviceTokenEnv": "AIN_STORE_SERVICE_TOKEN" }
 }

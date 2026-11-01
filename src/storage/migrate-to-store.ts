@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { writeFileSync, renameSync } from "node:fs";
 import type { StateValue } from "./encrypted-state";
-import { AinStoreStateClient, STATE_COLLECTIONS, StoreSdk, ainStoreStateClient, loadSdk, readAinStoreStateConfig, stateCollectionWriteRule, stateDigest } from "./ain-store-state-client";
+import { AinStoreStateClient, STATE_COLLECTIONS, StoreCore, StoreSdk, ainStoreStateClient, loadCore, loadSdk, readAinStoreStateConfig, stateCollectionWriteRule, stateDigest } from "./ain-store-state-client";
 
 /**
  * Move the orchestrator's state from encrypted chain records (AinStateStore) to AIN Store.
@@ -134,11 +134,11 @@ export function writeReport(path: string, report: VerificationReport): void {
  * App-owner operations that install the state collections for the Store (for review and signing
  * by the app owner; this tool never sends them).
  */
-export function setupOperations(app: string, writerAddress: string, sdk: { storeAppendFunctionConfig(): Record<string, unknown> }, storeServiceAddress?: string): Array<{ type: string; ref: string; value: unknown }> {
+export function setupOperations(app: string, writerAddress: string, core: StoreCore, storeServiceAddress?: string): Array<{ type: string; ref: string; value: unknown }> {
   const operations: Array<{ type: string; ref: string; value: unknown }> = [];
   for (const collection of STATE_COLLECTIONS) {
-    operations.push({ type: "SET_RULE", ref: `/apps/${app}/writes/${collection}`, value: { ".rule": { write: stateCollectionWriteRule(writerAddress) } } });
-    operations.push({ type: "SET_FUNCTION", ref: `/apps/${app}/writes/${collection}/$key`, value: { ".function": sdk.storeAppendFunctionConfig() } });
+    operations.push({ type: "SET_RULE", ref: `/apps/${app}/writes/${collection}`, value: { ".rule": { write: stateCollectionWriteRule(writerAddress, core) } } });
+    operations.push({ type: "SET_FUNCTION", ref: `/apps/${app}/writes/${collection}/$key`, value: { ".function": core.storeAppendFunctionConfig() } });
   }
   operations.push({ type: "SET_RULE", ref: `/apps/${app}/store/state`, value: { ".rule": { write: `auth.addr === '${storeServiceAddress ?? "<Store service account address>"}'` } } });
   return operations;
@@ -153,9 +153,9 @@ async function main(command: string | undefined): Promise<void> {
   const log = (line: string) => console.error(line);
   if (command === "setup-ops") {
     const config = readAinStoreStateConfig(process.env.AIN_STORE_CONFIG ?? "");
-    const sdk = loadSdk() as StoreSdk & { storeAppendFunctionConfig(): Record<string, unknown> };
+    const sdk: StoreSdk = loadSdk();
     const writer = sdk.privateKeySigner(config.writerKey.replace(/^0x/, ""), config.chainId) as { address: string };
-    console.log(JSON.stringify({ app: config.app, writerAddress: writer.address, operations: setupOperations(config.app, writer.address, sdk, argument("store-service-address")) }, null, 2));
+    console.log(JSON.stringify({ app: config.app, writerAddress: writer.address, operations: setupOperations(config.app, writer.address, loadCore(), argument("store-service-address")) }, null, 2));
     return;
   }
   const storePath = process.env.AIN_STORE_CONFIG ?? "";

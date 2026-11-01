@@ -25,13 +25,23 @@ the rest of the app is unchanged.
 
 - **Body.** Each document is `{ k: key, t: "string" | "set", v: value, x?: expiresAt }`. A read
   checks that `k` matches the key it asked for.
-- **Privacy.** All four collections are private: on chain a write record carries only the HMAC id
-  and the body hash, and the body itself goes to AinDrive. The read rule is `none`, so only the
-  service token can read.
+- **Privacy.** All four collections are private:
+  - On chain, a write record carries only the record id and the body hash. The record id is
+    `HMAC(hmacKey, "ain-store:v1:<app>:<collection>:<id>")`, the domain-separated `privateId` form.
+  - The body goes to AinDrive, with a random `__salt` and AES-256-GCM encryption at rest.
+  - The read rule is `none`, so only the service token can read. A document the caller can't read
+    answers 404, like a missing one.
 - **Writes.** Each write is signed by the orchestrator's writer key through the SDK's
-  `privateKeySigner`, and the collection rule (`stateCollectionWriteRule`) accepts only that
-  address. The client sends `prepare → sign → submit` and waits until the write is applied in chain
-  order, the same acknowledgement guarantee the chain adapter gave.
+  `privateKeySigner`.
+  - The collection rule is `compileServiceOnlyRule({ serviceAddress: <writer>, checkShape: true })`
+    (`stateCollectionWriteRule`), so only that address can write.
+  - The client sends `prepare → check → sign → submit`. The SDK lists the four collections in
+    `privateCollections` with the HMAC key. It refuses to sign unless the Store prepared exactly the
+    expected record ids, ops, bases and body hashes, and it builds the transaction itself.
+  - It then waits until the write is applied in chain order, matching the status by (tx hash, key).
+    This is the same acknowledgement guarantee the chain adapter gave.
+- **Deletes.** A deleted document keeps a tombstone version, and the next create uses that version
+  as its base. The adapter reads the tombstone version and handles this.
 - **Concurrency.** Every write passes the document's version as `ifVersion` (the record `base`).
   If another writer got in first, the client gets a `ConflictError`, reads again and retries. That
   keeps `sAdd`/`sRem` free of lost updates and makes `setNX` exclusive across processes. Within one
@@ -45,18 +55,24 @@ the rest of the app is unchanged.
 - **Reads.** Reads use a separate SDK `Store` instance that never writes, so a reader never sees a
   write that might still roll back.
 
-### SDK calls this depends on (`@ainize/store` 0.1.0)
+### SDK calls this depends on (`@ainize/store` 0.1.0 at ain-store `84af1b3`)
 
-- `createStore({ url, app, getToken, signer, writeTimeoutMs })`.
+- `createStore({ url, app, getToken, signer, writeTimeoutMs, privateCollections: { <c>: { hmacKey } } })`.
 - `privateKeySigner(hex, chainId)`.
 - `collection(name).doc(id).get()`, `.set(data, { ifVersion })` and `.delete({ ifVersion })`.
 - `collection(name).limit(n).startAfter(cursor).get()`, giving `{ docs, nextCursor }`.
 - `batch().set(ref, data, { ifVersion }).commit()`.
 - The error names `ConflictError` and `RuleRejectedError`.
-- `storeAppendFunctionConfig()`, used only by `setup-ops`.
+- From `@ainize/store-core`: `compileServiceOnlyRule(...)` (the SDK doesn't re-export it) and
+  `storeAppendFunctionConfig()`, both used by `setup-ops`. The tests also use `privateId(...)`.
 
-The SDK is not on npm yet. `vendor/` holds tarballs packed from ain-store commit `0154441`, listed
-as **optional** dependencies:
+The adapter doesn't use these:
+- `verify()`, which now needs a chain reader.
+- AIN-Session credentials, which are now request-bound. The orchestrator authenticates with the
+  Store's service bearer token instead.
+
+The SDK is not on npm yet. `vendor/` holds tarballs packed from ain-store `main` at `84af1b3`,
+listed as **optional** dependencies:
 
 - A build that does not copy `vendor/` still runs `npm ci` and compiles.
 - `STATE_BACKEND=ain-blockchain` never loads the SDK.
@@ -75,16 +91,25 @@ Once `@ainize/store` is published, replace the `file:` specs with the registry v
   "chainId": 1,
   "writerKey": "<hex secp256k1 key; only its address may write the state collections>",
   "serviceToken": "<the Store's AIN_STORE_SERVICE_TOKEN>",
+  "hmacKey": "<the Store's AIN_STORE_STATE_HMAC_KEY: the SDK computes the exact private ids with it>",
   "writeTimeoutMs": 120000
 }
 ```
 
 On ainize, store this file as the secret `AIN_STORE_CONFIG_B64`.
 
-The Store side of this project is `deploy/ain-store/store.config.json`. Fill in `startBlock` and
-`driveId` before deploying. Its secrets are `AIN_STORE_SERVICE_KEY`, `AINDRIVE_TOKEN`,
-`AIN_STORE_SERVICE_TOKEN` and `AIN_STORE_STATE_HMAC_KEY`. Keep encrypted copies of every key in
-Ain Vault.
+The Store side of this project is `deploy/ain-store/store.config.json`:
+- **Database:** managed Postgres through `DATABASE_URL`.
+- **Chain:** mainnet, `activationBlock` 1586503, `startBlock` 1587800. That was a recent block on
+  2026-11-01, before any `_storeAppend` exists under the app. If the functions are installed much
+  later, any block before the install also works.
+- **Storage:** an AinDrive OAuth grant.
+- **Collections:** four private ones, sharing one HMAC key and one encryption key.
+
+Before deploying, fill in `storage.driveId` and `storage.oauth.clientId`. You can optionally add the
+orchestrator's writer address to `chain.trustedSigners`.
+
+Keep encrypted copies of every key in Ain Vault.
 
 ## Tests
 
@@ -95,9 +120,14 @@ AIN_STORE_REPO=/path/to/ain-store node --test dist/storage/*.test.js
 ```
 
 - `state-client-contract.test.ts` runs the same `StateClient` contract against `AinStateStore`
-  and against a real Store service in dev mode. It also covers privacy (no plain key or value on
-  chain, and nothing on chain except `store/mmr`), the writer-only rule, the one-transaction
-  pipeline, and the expiry sweep.
+  and against a real Store service in dev mode. In dev mode the chain evaluates the compiled
+  `compileServiceOnlyRule` and mirrors the `_storeAppend` function tree. The file also covers:
+  - privacy: no plain key or value on chain, nothing on chain except `store/mmr`, and no plaintext
+    on the drive;
+  - the domain-separated `privateId`, and the SDK refusing a write under a wrong HMAC key;
+  - the writer-only rule;
+  - the one-transaction pipeline;
+  - the expiry sweep.
 - `migrate-to-store.test.ts` covers the dry run, resume after failure, idempotent rerun,
   verification (count plus a hash per key), catching up and pruning, tamper detection, and a chain
   write during verification.
@@ -111,23 +141,56 @@ Without `AIN_STORE_REPO`, the Store suites are skipped.
 Run each step only after the previous one succeeds. Nothing in this PR deploys, deletes or sends
 a mainnet transaction by itself.
 
-0. **Prerequisite.** The chain's `ain_store` timer flag must be active on mainnet, because the
-   Store relies on `_storeAppend`. Until then, run steps 1–3 only against a dev chain.
+0. **Prerequisite.** The chain's `ain_store` timer flag must be active, because the Store relies on
+   `_storeAppend`. On mainnet it activates at block **1586503**. The head was 1587804 on 2026-11-01.
 
-1. **Deploy the Store for this project.**
-   1. Create the Store's ainize project from `ain-store` (its `ainize.json` and `Dockerfile`)
-      using `deploy/ain-store/store.config.json`, and set its four secrets.
-   2. Print the app-owner operations and review them:
+1. **Deploy the Store for this project on ainize.** The Store keeps no state in its read-only
+   container; everything lives in the organization's managed Postgres.
+   1. **Create the org store.** Use the Storage tab, or
+      `POST /api/orgs/<org>/stores { "name": "uncommon_gallery_orchestrator-store", "kind": "postgres" }`.
+      Wait for `ready`.
+   2. **Create the Store's ainize project** from `ain-store`, with its `ainize.json` and
+      `Dockerfile`. Add `deploy/ain-store/store.config.json` as its `store.config.json`.
+   3. **Connect the store to the project.** Use the Storage tab, or
+      `POST /api/stores/<sid>/attachments { "projectId": "<Store project>", "binding": "db" }`.
+      The container then gets `DATABASE_URL`. The `release` command (`ain-store migrate`) creates
+      the schema on each deploy.
+   4. **Set up the AinDrive credential** (one AinDrive account per project):
+      1. Create a dedicated AinDrive account, for example `store-uncommon@…`, with **editor**
+         access on `<org drive>/store/uncommon_gallery_orchestrator` only.
+      2. Register an OAuth client (`POST https://aindrive.ainetwork.ai/api/oauth/register`) and
+         put its `client_id` in `storage.oauth.clientId`.
+      3. Signed in as that account, authorize `drives:read drives:write` with no `resource`
+         parameter, then exchange the code for tokens. The ain-store README has the exact requests.
+      4. Store the `refresh_token` as the secret `AINDRIVE_REFRESH_TOKEN` and use it nowhere else.
+         Reusing a rotated refresh token revokes the grant. The Store moves it into Postgres and
+         rotates it from then on.
+   5. **Set the project secrets** (`PUT /api/projects/<id>/secrets/<name>`):
+      - `AIN_STORE_SERVICE_KEY`: the Store service account key, which signs `/store/state`.
+      - `AIN_STORE_SERVICE_TOKEN`: the bearer token the orchestrator uses.
+      - `AIN_STORE_STATE_HMAC_KEY`: the private record ids. The orchestrator's `hmacKey` has the
+        same value.
+      - `AIN_STORE_STATE_ENCRYPT_KEY`: body encryption at rest. To rotate it, set a new key and list
+        the old variable in `previousEncryptKeyEnvs`.
+      - `AIN_STORE_TOKEN_KEY`: encrypts the stored AinDrive tokens.
+      - `AINDRIVE_REFRESH_TOKEN`.
+      - Optionally, `AIN_STORE_ALERT_WEBHOOK_URL`.
+   6. **Push to AinDrive** so ainize builds and deploys it. Readiness is `/healthz`.
+   7. **Print the app-owner operations** and review them:
 
       ```sh
-      AIN_STORE_CONFIG=/private/ain-store-state.json npm run state:migrate -- setup-ops --store-service-address 0x<Store service account>
+      AIN_STORE_CONFIG=/private/ain-store-state.json npm run state:migrate -- setup-ops --store-service-address 0x<Store service account, checksummed>
       ```
 
-      This prints a `SET_RULE` (writer-only) and a `SET_FUNCTION` (`_storeAppend`) for each of
-      `threads`, `messages`, `reports` and `meta`, plus the writer rule of `/apps/<app>/store/state`.
-   3. Have the app owner sign and send those operations.
-   4. Check that the Store's `/healthz` shows `alert: null` and that `/v1/status` is following
-      the chain.
+      This prints, for each of `threads`, `messages`, `reports` and `meta`:
+      - a `SET_RULE` with `compileServiceOnlyRule` for the writer address;
+      - a `SET_FUNCTION` that installs `_storeAppend`.
+
+      It also prints the writer rule of `/apps/<app>/store/state` for the Store service account.
+   8. **Have the app owner sign and send those operations.** The block they land in must come after
+      `startBlock`.
+   9. **Check the Store.** `/healthz` should answer 200 with `ready: true` (it answers 503 under an
+      alert), and `/v1/status` (with the service token) should show it following the chain.
 
 2. **Migrate while the service keeps running.** The migration only reads chain state.
 
