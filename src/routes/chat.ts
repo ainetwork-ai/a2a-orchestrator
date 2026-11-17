@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import WorldManager from "../world/worldManager";
+import { llmEndpoint } from "../utils/llmEndpoint";
 
 const router = Router();
 
@@ -8,12 +9,12 @@ router.post("/", async (req: Request, res: Response) => {
     const { message, action } = req.body;
 
     // Get API URL and model from environment variables
-    const apiUrl = process.env.LLM_API_URL;
+    const apiUrl = llmEndpoint().apiUrl;
     const model = process.env.LLM_MODEL;
 
     if (!apiUrl) {
       return res.status(500).json({
-        error: "LLM_API_URL is not set in environment variables",
+        error: "No model endpoint is set (LLM_API_URL, or AINIZE_URL on ainize)",
       });
     }
 
@@ -86,7 +87,7 @@ router.get("/stream", (req: Request, res: Response) => {
   res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
 
   // Get API URL and model from environment variables
-  const apiUrl = process.env.LLM_API_URL;
+  const apiUrl = llmEndpoint().apiUrl;
   const model = process.env.LLM_MODEL;
 
   if (!apiUrl || !model) {

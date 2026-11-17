@@ -1,5 +1,6 @@
 import https from "https";
 import { HEADER_THREAD_ID, sanitizeHeaderValue } from "../utils/headers";
+import { llmEndpoint } from "../utils/llmEndpoint";
 
 // Create a custom agent that allows self-signed certificates
 const httpsAgent = new https.Agent({
@@ -159,8 +160,9 @@ class RequestManager {
     };
     // Scope the service credential to the configured model endpoint; never
     // forward it to arbitrary agent URLs or a different request destination.
-    if (process.env.LLM_API_KEY && apiUrl === process.env.LLM_API_URL) {
-      headers.Authorization = `Bearer ${process.env.LLM_API_KEY}`;
+    const endpoint = llmEndpoint();
+    if (endpoint.apiKey && apiUrl === endpoint.apiUrl) {
+      headers.Authorization = `Bearer ${endpoint.apiKey}`;
     }
     if (threadId) headers[HEADER_THREAD_ID] = sanitizeHeaderValue(threadId);
 
