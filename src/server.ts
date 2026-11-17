@@ -10,6 +10,7 @@ import ThreadManager from "./world/threadManager";
 import ReportService from "./services/reportService";
 import { initStateStore } from "./utils/state";
 import { loadAgentEndpointMap } from "./world/agentEndpointMap";
+import { llmEndpoint } from "./utils/llmEndpoint";
 
 // Load environment variables
 dotenv.config();
@@ -17,11 +18,11 @@ dotenv.config();
 // Initialize Redis and ThreadManager
 async function initialize() {
   if (process.env.AGENT_ENDPOINT_MAP) loadAgentEndpointMap(process.env.AGENT_ENDPOINT_MAP);
-  const apiUrl = process.env.LLM_API_URL;
+  const apiUrl = llmEndpoint().apiUrl;
   const model = process.env.LLM_MODEL;
 
   if (!apiUrl || !model) {
-    console.error("Error: LLM_API_URL and LLM_MODEL must be set in environment variables");
+    console.error("Error: LLM_MODEL and a model endpoint (LLM_API_URL, or AINIZE_URL on ainize) must be set in environment variables");
     process.exit(1);
   }
 

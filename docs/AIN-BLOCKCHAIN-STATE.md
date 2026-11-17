@@ -39,6 +39,8 @@ The existing string/set/cache operations use the selected state adapter. `multi(
 
 For authenticated model endpoints, configure `LLM_API_KEY`. Its Bearer header is sent only when the request destination exactly matches `LLM_API_URL`.
 
+On ainize, leave `LLM_API_URL` unset: chat completions then go to the gateway the platform gives the project (`AINIZE_URL` + `/v1/chat/completions`) with the project's own key (`AINIZE_API_KEY`), and `LLM_MODEL` names a model served there (see ainize.ai/models). The key is sent only to that gateway address.
+
 Build and verify locally:
 
 ```sh
