@@ -31,9 +31,10 @@ test("model credential reaches its configured endpoint and is withheld from othe
 });
 
 test("on ainize, with no model service named, requests go to the project's gateway with the project's own key", async () => {
-  const seen: { path: string; authorization?: string }[] = [];
+  const seen: { path: string; authorization?: string }[] = [], bodies: any[] = [];
   const server = createServer(async (request, response) => {
-    for await (const _ of request) { /* Consume the request before replying. */ }
+    let raw = ""; for await (const chunk of request) raw += chunk;
+    bodies.push(JSON.parse(raw));
     seen.push({ path: request.url!, authorization: request.headers.authorization });
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }));
@@ -56,6 +57,11 @@ test("on ainize, with no model service named, requests go to the project's gatew
       { path: "/t/project-token/v1/chat/completions", authorization: "Bearer project-own-key" },
       { path: "/agent", authorization: undefined },
     ]);
+    // The gateway's models answer only after reasoning unless told not to; a report call then returns no text.
+    assert.deepEqual(bodies[0].chat_template_kwargs, { thinking: false, enable_thinking: false });
+    assert.equal(bodies[0].reasoning_effort, "low");
+    assert.equal(bodies[0].max_tokens, 128);
+    assert.equal("chat_template_kwargs" in bodies[1] || "reasoning_effort" in bodies[1], false);
     process.env.LLM_API_URL = "http://model.example/v1/chat/completions";
     assert.deepEqual(llmEndpoint(), { apiUrl: "http://model.example/v1/chat/completions", apiKey: "left-over-model-service-secret" });
   } finally {

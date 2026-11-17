@@ -147,12 +147,16 @@ class RequestManager {
   private async executeRequest(request: QueuedRequest): Promise<string> {
     const { apiUrl, model, messages, maxTokens, temperature, threadId } = request;
 
+    const endpoint = llmEndpoint();
+    const toModelEndpoint = apiUrl === endpoint.apiUrl;
     const requestBody = {
       model,
       messages,
       max_tokens: maxTokens,
       temperature,
       stream: false,
+      // Options that belong to the configured model endpoint only (never sent to another destination).
+      ...(toModelEndpoint ? endpoint.extraBody : undefined),
     };
 
     const headers: Record<string, string> = {
@@ -160,8 +164,7 @@ class RequestManager {
     };
     // Scope the service credential to the configured model endpoint; never
     // forward it to arbitrary agent URLs or a different request destination.
-    const endpoint = llmEndpoint();
-    if (endpoint.apiKey && apiUrl === endpoint.apiUrl) {
+    if (endpoint.apiKey && toModelEndpoint) {
       headers.Authorization = `Bearer ${endpoint.apiKey}`;
     }
     if (threadId) headers[HEADER_THREAD_ID] = sanitizeHeaderValue(threadId);
