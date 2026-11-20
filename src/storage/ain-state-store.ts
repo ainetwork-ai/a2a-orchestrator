@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { EncryptedStateCodec, STATE_VERSION, StateHead, StateValue } from "./encrypted-state";
 import { AinWriteRejected, ChainOperation, StateChainTransport } from "./ain-transport";
 
@@ -20,6 +20,21 @@ export function legacyStateChunksWriteRule(address: string): string {
   return `auth.addr === '${address}' && data === null && util.isString(newData) && util.checkValuePathLen(parsedValuePath, 7) === true`;
 }
 
+/**
+ * SHA-256 over the sorted `recordId:revision` of every head that is not a tombstone. Any write
+ * changes it, so chain cleanup can refuse a verification that is no longer current.
+ */
+export async function headsFingerprint(chain: StateChainTransport, root: string): Promise<{ heads: number; sha256: string }> {
+  if (!chain.childLabels) throw Error("Fingerprinting needs a chain transport that lists child labels");
+  const lines: string[] = [];
+  for (const id of await chain.childLabels(`${root}/heads`)) {
+    const head = await chain.get<StoredHead>(`${root}/heads/${id}`);
+    if (head && !head.deleted) lines.push(`${id}:${head.revision}`);
+  }
+  lines.sort();
+  return { heads: lines.length, sha256: createHash("sha256").update(lines.join("\n")).digest("hex") };
+}
+
 /** Default budget for decrypted records kept in memory. */
 export const DEFAULT_STATE_CACHE_BYTES = 32 * 1024 * 1024;
 
@@ -30,7 +45,7 @@ export class AinStateStore {
   private readonly cache = new Map<string, { revision: string; state: StateValue; bytes: number }>();
   private cacheBytes = 0;
   constructor(private readonly chain: StateChainTransport, private readonly codec: EncryptedStateCodec,
-    private readonly root: string, private readonly clock = Date.now,
+    readonly root: string, private readonly clock = Date.now,
     private readonly cacheMaxBytes = DEFAULT_STATE_CACHE_BYTES,
     // Off only while the chain still carries the legacy chunk rule, which rejects removals.
     private readonly pruneRevisions = true) {
@@ -353,5 +368,21 @@ export class AinStateStore {
     }
     return { records: ids.length, rewritten, failed };
   }
+  /**
+   * Every live (unexpired) record with its id and revision, in head order. Read-only; used to
+   * migrate state off chain (`migrate-to-store`).
+   */
+  async *entries(): AsyncGenerator<{ recordId: string; revision: string; state: StateValue }> {
+    if (!this.chain.childLabels) throw Error("Exporting needs a chain transport that lists child labels");
+    for (const id of await this.chain.childLabels(`${this.root}/heads`)) {
+      const { head, state } = await this.read(id);
+      if (head && state) yield { recordId: id, revision: head.revision, state };
+    }
+  }
+  /**
+   * SHA-256 over the sorted `recordId:revision` of every head that is not a tombstone. Any write
+   * after a verification run changes it, so chain cleanup can refuse a stale verification.
+   */
+  headsFingerprint(): Promise<{ heads: number; sha256: string }> { return headsFingerprint(this.chain, this.root); }
   async quit(): Promise<void> { await this.queue; this.cache.clear(); this.cacheBytes = 0; }
 }

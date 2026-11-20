@@ -1,5 +1,7 @@
 # Organization state on AIN Blockchain
 
+> **Moving off chain.** `STATE_BACKEND=ain-store` keeps this state in the project's AIN Store, and the chain keeps only the Store's MMR and state root (under 1 MB instead of ~80 MB). The migration, verification and chain cleanup tools and the cutover runbook are in [AIN-STORE-STATE.md](AIN-STORE-STATE.md). The chain backend below stays available until that cleanup is done.
+
 Set `STATE_BACKEND=ain-blockchain` and `AIN_STATE_CONFIG` to a private JSON file owned by the runtime user (mode `0600`). Explicit Blockchain configuration never falls back to Redis. Redis remains the default for existing deployments and can be retained separately for migration comparison and rollback.
 
 The configuration contains `organizationId`, `application`, `rpcUrl`, `chainId`, `genesisHash`, `privateKey`, `encryptionKey`, `gasPrice`, and `transactionBytesLimit`. Both keys are 32-byte hexadecimal strings. Keep an encrypted backup of this file in Ain Vault. The transaction signing domain and genesis hash must come from the intended running chain; an L2 execution signing domain can differ from its genesis/checkpoint chain ID.

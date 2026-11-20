@@ -3,38 +3,8 @@ import { test } from "node:test";
 import { randomBytes } from "node:crypto";
 import { AinStateStore } from "./ain-state-store";
 import { EncryptedStateCodec } from "./encrypted-state";
-import { AinWriteRejected, ChainOperation, StateChainTransport } from "./ain-transport";
+import { TestChain } from "./ain-test-chain";
 
-class TestChain implements StateChainTransport {
-  values = new Map<string, unknown>();
-  rejectChunks = false;
-  unconfirmed = false;
-  rejectHeadId: string | null = null;
-  legacyChunkRule = false;
-  async childLabels(ref: string): Promise<string[]> {
-    return [...new Set([...this.values.keys()].filter(key => key.startsWith(ref + "/")).map(key => key.slice(ref.length + 1).split("/")[0]))];
-  }
-  async get<T>(ref: string): Promise<T | null> {
-    if (ref.endsWith("/heads")) return Object.fromEntries([...this.values].filter(([key]) => key.startsWith(ref + "/")).map(([key, value]) => [key.slice(ref.length + 1), value])) as T;
-    return this.values.has(ref) ? structuredClone(this.values.get(ref)) as T : null;
-  }
-  async write(operations: ChainOperation[]): Promise<void> {
-    const draft = new Map(this.values);
-    for (const op of operations) {
-      if (op.ref.includes("/heads/")) {
-        if (this.rejectHeadId && op.ref.endsWith("/" + this.rejectHeadId)) throw new AinWriteRejected("Head rejected");
-        const before = draft.get(op.ref) as { revision: string } | undefined;
-        const after = op.value as { previousRevision: string | null };
-        if (after.previousRevision !== (before?.revision ?? null)) throw new AinWriteRejected("CAS rejected");
-      } else if (this.rejectChunks) throw Error("Chunk confirmation failed");
-      else if (op.value === null && this.legacyChunkRule) throw new AinWriteRejected("Legacy chunk rule rejects removal");
-      if (op.value === null) { for (const key of [...draft.keys()]) if (key === op.ref || key.startsWith(op.ref + "/")) draft.delete(key); continue; }
-      draft.set(op.ref, structuredClone(op.value));
-    }
-    this.values = draft;
-    if (this.unconfirmed) throw Error("Finality timed out");
-  }
-}
 const root = "/apps/uncommon_gallery_orchestrator/state";
 function setup() {
   const chain = new TestChain(), codec = new EncryptedStateCodec("org-uncommon", randomBytes(32));

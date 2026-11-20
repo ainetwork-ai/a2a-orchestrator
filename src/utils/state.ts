@@ -1,4 +1,5 @@
 import { createAinStateStore } from "../storage/config";
+import { createAinStoreStateClient } from "../storage/ain-store-state-client";
 import type { StateClient } from "../storage/state-client";
 export type { StateClient } from "../storage/state-client";
 
@@ -10,7 +11,12 @@ export async function initStateStore(): Promise<StateClient> {
   if (stateClient) return stateClient;
   const backend = process.env.STATE_BACKEND ?? "ain-blockchain";
   if (backend === "redis") {
-    throw Error("Redis state is deprecated. Use STATE_BACKEND=ain-blockchain.");
+    throw Error("Redis state is deprecated. Use STATE_BACKEND=ain-store or ain-blockchain.");
+  }
+  if (backend === "ain-store") {
+    // Documents in this project's AIN Store (bodies on AinDrive, write records + MMR on chain).
+    stateClient = await createAinStoreStateClient(process.env.AIN_STORE_CONFIG ?? "");
+    return stateClient;
   }
   if (backend !== "ain-blockchain") throw Error(`Unsupported STATE_BACKEND: ${backend}`);
   stateClient = await createAinStateStore(process.env.AIN_STATE_CONFIG ?? "");

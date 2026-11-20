@@ -3,8 +3,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files (vendor/ holds the @ainize/store SDK tarballs, an optional dependency)
 COPY --chmod=644 package*.json ./
+COPY vendor ./vendor
 
 # Install dependencies
 RUN npm ci
@@ -22,6 +23,7 @@ WORKDIR /app
 
 # Copy package files
 COPY --chmod=644 package*.json ./
+COPY vendor ./vendor
 
 # Install production dependencies only
 RUN npm ci --omit=dev
